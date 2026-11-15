@@ -1,0 +1,10 @@
+# Written by the Claude Code engine when it loads the mod
+.claude-plugin/types/
+tsconfig.json
+
+# Local Claude Code settings, such as approved command permissions
+.claude/settings.local.json
+
+# Local development notes; they hold paths of this machine
+NOTES.md
+HANDOFF.md

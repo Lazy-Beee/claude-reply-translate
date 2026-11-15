@@ -1,0 +1,47 @@
+{
+  "name": "reply-translate",
+  "version": "0.6.0",
+  "description": "Adds translate buttons under Claude's final reply of each turn",
+  "author": { "name": "Lazy-Beee" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "languages": {
+      "type": "string",
+      "title": "Target languages",
+      "description": "Languages to translate into, comma-separated: tags such as zh-CN, zh-TW, en, ja, or names. The first one that is not the reply's own language is the main button. auto: the language the buttons are drawn in, then English",
+      "default": "auto"
+    },
+    "primaryLanguage": {
+      "type": "string",
+      "title": "Main language",
+      "description": "Your own language, such as zh-CN: as each turn ends, its final reply is translated into it in the background when the reply is in another language, so the translation is ready when you press (one model call per such reply). It also comes first among the targets. Empty: off",
+      "default": ""
+    },
+    "autoExpand": {
+      "type": "boolean",
+      "title": "Open main-language translations by themselves",
+      "description": "Needs a main language. true: a final reply in another language is translated into the main language as its turn ends and the translation opens by itself, with a progress bar while it runs; false: it is translated in the background and opens when you press",
+      "default": false
+    },
+    "uiLanguage": {
+      "type": "string",
+      "title": "Button language",
+      "description": "Language of the buttons: auto follows Claude Code's language setting, then the system language; or a tag such as zh-CN, en, ja",
+      "default": "auto"
+    },
+    "showButtons": {
+      "type": "string",
+      "title": "When to show the buttons",
+      "description": "hover: on the desktop, only while the pointer is over the reply; always: all the time",
+      "options": ["hover", "always"],
+      "default": "hover"
+    },
+    "model": {
+      "type": "string",
+      "title": "Translation model",
+      "description": "Model alias or id used for the translation",
+      "default": "haiku"
+    }
+  }
+}

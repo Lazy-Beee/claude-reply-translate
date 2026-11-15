@@ -1,0 +1,12 @@
+{
+  "name": "reply-translate",
+  "description": "reply-translate, a Claude Code mod that translates Claude's final replies",
+  "owner": { "name": "Lazy-Beee" },
+  "plugins": [
+    {
+      "name": "reply-translate",
+      "source": "./",
+      "description": "Adds translate buttons under Claude's final reply of each turn"
+    }
+  ]
+}
