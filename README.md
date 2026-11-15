@@ -44,15 +44,15 @@ To run a copy you are working on, point Claude Code at the plugin folder in `~/.
 }
 ```
 
-The setting takes effect in sessions started afterwards, in every session. With the watch flag on, a running session reloads the mod when its files change. Several folders are separated with `;`.
+The setting takes effect in sessions started afterwards, in every session. With the watch flag on, a running session reloads the mod when its files change. Several folders are separated with `;`. If you also installed the mod from the marketplace, disable that copy (`claude plugin disable reply-translate@reply-translate`), so it does not load twice.
 
 ## Configure
 
-Options live in `~/.claude/settings.json` under `pluginConfigs`. Any option you leave out keeps its default. A saved change reloads the mod. The key is the plugin's id: `reply-translate@reply-translate` when it is installed from the marketplace, and `reply-translate` when it is loaded from a folder.
+Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the plugin's id: `reply-translate@reply-translate` when it is installed from the marketplace, and `reply-translate` when it is loaded from a folder. Any option you leave out keeps its default. Start a new session after a change.
 
 ```json
 "pluginConfigs": {
-  "reply-translate": {
+  "reply-translate@reply-translate": {
     "options": {
       "languages": "zh-CN, en",
       "primaryLanguage": "zh-CN",
@@ -74,7 +74,13 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`. Any option you 
 | `showButtons` | `hover` | `hover`: on the desktop, the buttons show only while the pointer is over the reply. `always`: they always show. |
 | `model` | `haiku` | The model used to translate: an alias or a full model id. |
 
-The desktop Code tab has no `/config` menu, so edit the file. In a terminal session, `/config` lists the options too.
+You can also set them from a shell. Every value is given as a string:
+
+```
+echo '{"languages":"zh-CN, en","primaryLanguage":"zh-CN","autoExpand":"true"}' | claude plugin configure reply-translate@reply-translate --values-stdin
+```
+
+`claude plugin configure reply-translate@reply-translate` on its own lists the options and which ones are set. In a terminal session, `/plugin configure` and `/config` list them too.
 
 ## Cost
 

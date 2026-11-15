@@ -44,15 +44,15 @@
 }
 ```
 
-这个设置对之后新开的会话生效，而且所有会话都会加载。打开 watch 后，文件一改，正在运行的会话就会重新加载这个 mod。多个文件夹用 `;` 分隔。
+这个设置对之后新开的会话生效，而且所有会话都会加载。打开 watch 后，文件一改，正在运行的会话就会重新加载这个 mod。多个文件夹用 `;` 分隔。如果你也从 marketplace 装了这个 mod，先把那一份停用（`claude plugin disable reply-translate@reply-translate`），免得加载两份。
 
 ## 配置
 
-选项写在 `~/.claude/settings.json` 的 `pluginConfigs` 下。没写的选项用默认值。保存后 mod 会自动重新加载。键是插件的 id：从 marketplace 安装的是 `reply-translate@reply-translate`，从文件夹加载的是 `reply-translate`。
+选项写在 `~/.claude/settings.json` 的 `pluginConfigs` 下，键是插件的 id：从 marketplace 安装的是 `reply-translate@reply-translate`，从文件夹加载的是 `reply-translate`。没写的选项用默认值。改完后新开一个会话生效。
 
 ```json
 "pluginConfigs": {
-  "reply-translate": {
+  "reply-translate@reply-translate": {
     "options": {
       "languages": "zh-CN, en",
       "primaryLanguage": "zh-CN",
@@ -74,7 +74,13 @@
 | `showButtons` | `hover` | `hover`：在桌面端，鼠标在回复上时才显示按钮。`always`：一直显示。 |
 | `model` | `haiku` | 用来翻译的模型，写别名或完整的模型 id。 |
 
-桌面版 Code 标签页里没有 `/config` 菜单，所以要直接改文件。在终端版里，`/config` 也会列出这些选项。
+也可以在命令行里设置。每个值都要写成字符串：
+
+```
+echo '{"languages":"zh-CN, en","primaryLanguage":"zh-CN","autoExpand":"true"}' | claude plugin configure reply-translate@reply-translate --values-stdin
+```
+
+只运行 `claude plugin configure reply-translate@reply-translate`，会列出所有选项，以及哪些已经设置。在终端版里，`/plugin configure` 和 `/config` 也会列出这些选项。
 
 ## 费用
 
