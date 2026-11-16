@@ -14,6 +14,7 @@ A Claude Code mod that adds translate buttons under Claude's **final reply** of 
 - **Each language is translated once per reply.** Translations are cached by language and kept between sessions.
 - **Ready before you ask (optional).** Set a main language and replies in other languages are translated into it in the background as each turn ends. With `autoExpand` on, the translation opens by itself.
 - **Read in your language (optional).** With `replaceOriginal` on, a translation takes the place of the reply instead of opening under it, so each reply shows in one language at a time. A **Show original** button brings the reply back. With a main language set too, replies in other languages are translated into it as each turn ends and shown in its place, with no press.
+- **Everything Claude writes (optional).** With `translateAll` on, the notes Claude writes between tool calls while it works are translated too. They get no buttons of their own: the buttons under the turn's final reply act on the whole turn, notes included, and the row above the prompt on the last few turns.
 - **All recent replies at once.** A row above the prompt shows or hides the translations of the last few final replies (10 by default) in one press. Only those replies are touched, so a long conversation costs no more than a short one.
 - **Buttons in your language.** The button text follows Claude Code's `language` setting, then the system language. It is available in English, Simplified and Traditional Chinese, Japanese, Korean, Spanish, French and German.
 
@@ -63,6 +64,7 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the pl
       "skipPrimaryReplies": false,
       "uiLanguage": "auto",
       "alwaysShowButtons": true,
+      "translateAll": false,
       "controlRange": 10,
       "model": "haiku"
     }
@@ -79,6 +81,7 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the pl
 | `uiLanguage` | `auto` | The language of the buttons. `auto` follows Claude Code's `language` setting, then the system language. You can also give a tag such as `zh-CN`. |
 | `skipPrimaryReplies` | `false` | Needs a main language. When on, a reply already in your main language is left as it is: no buttons, and no room kept for them. A reply that has a translation open already still shows it. |
 | `alwaysShowButtons` | `true` | `true`: the buttons always show. `false`: on the desktop, they show only while the pointer is over the reply. |
+| `translateAll` | `false` | When on, the notes Claude writes between tool calls are translated too. A note has no buttons: the buttons under its turn's final reply put the whole turn in one language, and hide or show its translations together. A reply in your main language keeps its buttons when its notes are not. The notes show their translations as the reply does: in their place with `replaceOriginal`, else under them. With a main language set, each note is translated as soon as the tool call after it starts. |
 | `controlRange` | `10` | How many of the latest final replies the row above the prompt acts on. **Show translations** opens a translation on each: one shown before shows again, and a reply with none is translated into its main target, one model call each. With a main language set, replies already in it are skipped. The other button shows the originals again (**Show originals** with `replaceOriginal`, else **Hide translations**). `0` draws no row. |
 | `model` | `haiku` | The model used to translate: an alias or a full model id. |
 
@@ -92,7 +95,7 @@ echo '{"languages":"zh-CN, en","primaryLanguage":"zh-CN","autoExpand":"true"}' |
 
 ## Cost
 
-Translations run through your session's own model client and credentials. On a Claude subscription they count toward your plan's usage; with an API key they are billed to your account. Each call shows in `/cost`. With a main language set, every final reply in another language costs one call, whether or not you open it. **Show translations** above the prompt costs one call for each of the recent replies that has no translation yet, `controlRange` of them at most.
+Translations run through your session's own model client and credentials. On a Claude subscription they count toward your plan's usage; with an API key they are billed to your account. Each call shows in `/cost`. With a main language set, every final reply in another language costs one call, whether or not you open it. **Show translations** above the prompt costs one call for each of the recent replies that has no translation yet, `controlRange` of them at most. With `translateAll` and a main language, every note Claude writes in another language costs one call too.
 
 ## How it works
 
@@ -106,6 +109,7 @@ Translations run through your session's own model client and credentials. On a C
 - The reply's language is recognised for Chinese, Japanese, Korean and English. For any other language, every target is offered.
 - With `alwaysShowButtons` off, each final reply keeps a strip about two lines high for the buttons, even when they are hidden.
 - Sessions viewed through Remote Control show no buttons.
+- With `translateAll`, notes a model writes as thinking that the desktop shows as text stay as written: the desktop draws them itself, out of a mod's reach. Only notes written as text are translated.
 
 ## Develop
 

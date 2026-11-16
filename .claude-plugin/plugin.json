@@ -1,6 +1,6 @@
 {
   "name": "reply-translate",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Adds translate buttons under Claude's final reply of each turn",
   "author": { "name": "Lazy-Beee" },
   "license": "MIT",
@@ -47,6 +47,12 @@
       "title": "Always show the buttons",
       "description": "true: the buttons always show under each final reply; false: on the desktop they show only while the pointer is over the reply",
       "default": true
+    },
+    "translateAll": {
+      "type": "boolean",
+      "title": "Translate all of Claude's text",
+      "description": "true: the notes Claude writes between tool calls while it works are translated too, not only its final reply of each turn. The notes get no buttons of their own: the buttons under the turn's final reply act on the whole turn. With a main language set, each note in another language is translated as the tool call after it starts, one model call each; false: only the final replies",
+      "default": false
     },
     "controlRange": {
       "type": "number",

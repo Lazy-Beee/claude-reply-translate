@@ -56,6 +56,7 @@ function engine(
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('clock.after', () => ({ value: undefined }))
+  on('tool.call', () => ({ result: {} }))
   on('settings.read', () => ({ value: options.language === undefined ? {} : { language: options.language } }))
   on('store.get', (_, e) => ({ value: store.get(e.key) }))
   on('store.set', (_, e) => {
@@ -503,6 +504,275 @@ const band = {
     view: {},
   },
 } as const
+
+// A note between tool calls draws no buttons: its turn's final reply has
+// them, and they act on the note too. Without replaceOriginal the note's
+// translation opens under it, as the reply's does.
+test(
+  "with translateAll a note goes with its turn's final reply",
+  { options: { languages: 'zh-CN, en', translateAll: true } },
+  async ($, on) => {
+    const { asked } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    const before = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect(await before.find({ type: 'Button' })).toBeUndefined()
+    expect(await drawn(before)).toEqual([WORKING])
+    await before.unmount()
+
+    const final = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const main = await final.find({ type: 'Button', text: /Simplified Chinese/ })
+    expect(main?.props.label).toBe('Translate · Simplified Chinese')
+    await final.press({ key: String(main?.key) })
+    expect(asked).toHaveLength(2)
+    const prompts = asked.map(call => call.prompt).join('\n')
+    expect(prompts).toContain(WORKING)
+    expect(prompts).toContain(FINAL_EN)
+    expect((await final.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+
+    const note = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect((await note.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+    expect(await drawn(note)).toEqual([WORKING])
+    expect(await note.find({ type: 'Button' })).toBeUndefined()
+    await note.unmount()
+
+    // Hiding the reply's translation hides the note's too.
+    const hide = await final.find({ type: 'Button', text: /Hide translation/ })
+    await final.press({ key: String(hide?.key) })
+    const hidden = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
+    await hidden.unmount()
+    await final.unmount()
+  },
+)
+
+const NOTE = 'Now I will check the logs for the failing test.'
+const FINAL_NEXT = 'The logs are clean, and the test passes now.'
+
+// A fourth turn: a note before a tool call, then the final reply.
+const NEXT_TURN: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: 'Check the logs' }] },
+  {
+    role: 'assistant',
+    content: [
+      { type: 'text', text: NOTE },
+      { type: 'tool_use', id: 't2', name: 'Read', input: {} },
+    ],
+  },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: 'ok' }] },
+  { role: 'assistant', content: [{ type: 'text', text: FINAL_NEXT }] },
+]
+
+// The history arrives only as the fourth turn ends, so every unit is new to
+// the mod then; only the fourth turn's are translated, the rest wait.
+test(
+  'with translateAll only the latest turn is translated as it ends',
+  { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', replaceOriginal: true, translateAll: true } },
+  async ($, on) => {
+    let messages: Message[] = []
+    const { asked, store } = engine(on, { messages: () => messages })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    messages = [...MESSAGES, ...NEXT_TURN]
+    await $.turn.complete({ answer: FINAL_NEXT, durationMs: 1, isAborted: false, turnId: 't4', reason: 'answer' })
+    const keys = [NOTE, FINAL_NEXT].map(text => `t:${fingerprint(text)}`)
+    const waiting = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+    for (let i = 0; i < 200 && !keys.every(key => store.has(key)); i++) {
+      await waiting.find({ type: 'Text' })
+    }
+    await waiting.unmount()
+
+    expect(asked).toHaveLength(2)
+    const prompts = asked.map(call => call.prompt).join('\n')
+    expect(prompts).toContain(NOTE)
+    expect(prompts).toContain(FINAL_NEXT)
+    expect(prompts).not.toContain(WORKING)
+    expect(prompts).not.toContain(FINAL_EN)
+
+    const note = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(note)).toEqual(['ZH-TEXT'])
+    await note.unmount()
+    // An earlier turn's note waits for a press on its turn's reply.
+    const working = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect(await drawn(working)).toEqual([WORKING])
+    expect(await working.find({ type: 'Button' })).toBeUndefined()
+    await working.unmount()
+    const first = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    expect(await first.find({ type: 'Button', text: /Simplified Chinese/ })).toBeDefined()
+    await first.unmount()
+  },
+)
+
+// Thinking the desktop shows as text: a narration signature and its text.
+const NARRATION = 'Two windows are running against each other, so I am stopping mine.'
+const NARRATED = 'EgluYXJyYXRpb24SDHh5eg=='
+const HIDDEN = 'EglzdW1tYXJ5eHgSDHh5eg=='
+const THOUGHT = 'I should check which process holds the port before stopping it.'
+
+const NARRATED_TURN: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: 'Fix the bot' }] },
+  {
+    role: 'assistant',
+    content: [
+      { type: 'thinking', thinking: '', signature: HIDDEN },
+      { type: 'thinking', thinking: THOUGHT, signature: HIDDEN },
+      { type: 'thinking', thinking: `${NARRATION}\n\n`, signature: NARRATED },
+      { type: 'tool_use', id: 't5', name: 'Bash', input: {} },
+    ],
+  },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't5', content: 'ok' }] },
+  { role: 'assistant', content: [{ type: 'text', text: FINAL_NEXT }] },
+]
+
+// Seen in use: models write notes as thinking the desktop shows as text. The
+// desktop draws them itself, out of the mod's reach, so no thinking is
+// translated: it would cost a call for a translation nobody sees.
+test(
+  'with translateAll thinking is not translated, even thinking the desktop shows',
+  { options: { languages: 'zh-CN, en', translateAll: true } },
+  async ($, on) => {
+    const { asked } = engine(on, { messages: () => NARRATED_TURN })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    const note = await $.ui.mount({ ...reply(NARRATION), surface: 'desktop' })
+    expect(await note.find({ type: 'Button' })).toBeUndefined()
+    await note.unmount()
+
+    const final = await $.ui.mount({ ...reply(FINAL_NEXT), surface: 'desktop' })
+    const main = await final.find({ type: 'Button', text: /Simplified Chinese/ })
+    await final.press({ key: String(main?.key) })
+    const prompts = asked.map(call => call.prompt).join('\n')
+    expect(asked).toHaveLength(1)
+    expect(prompts).toContain(FINAL_NEXT)
+    expect(prompts).not.toContain(NARRATION)
+    expect(prompts).not.toContain(THOUGHT)
+    await final.unmount()
+  },
+)
+
+// A long turn: its note is translated once the call after it starts, not
+// only when the turn ends.
+test(
+  'with translateAll a note is translated as the next tool call starts',
+  { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', replaceOriginal: true, translateAll: true } },
+  async ($, on) => {
+    let messages: Message[] = [...MESSAGES]
+    const { asked, store } = engine(on, { messages: () => messages })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    // The turn has its note and a call so far, and no reply yet.
+    messages = [...MESSAGES, ...NEXT_TURN.slice(0, 2)]
+    await $.tool.call({ tool: 'Read', file_path: '/logs/test.log' })
+    const key = `t:${fingerprint(NOTE)}`
+    const waiting = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+    for (let i = 0; i < 200 && !store.has(key); i++) {
+      await waiting.find({ type: 'Text' })
+    }
+    await waiting.unmount()
+
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.prompt).toContain(NOTE)
+    const note = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(note)).toEqual(['ZH-TEXT'])
+    expect(await note.find({ type: 'Button' })).toBeUndefined()
+    await note.unmount()
+  },
+)
+
+const FINAL_ZH_NEXT = '日志都正常，测试现在也通过了。'
+
+// A turn of English notes ending in a Chinese reply, as Claude often writes
+// for a Chinese reader.
+const MIXED_TURN: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: '看下日志' }] },
+  {
+    role: 'assistant',
+    content: [
+      { type: 'text', text: NOTE },
+      { type: 'tool_use', id: 't3', name: 'Read', input: {} },
+    ],
+  },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't3', content: 'ok' }] },
+  { role: 'assistant', content: [{ type: 'text', text: FINAL_ZH_NEXT }] },
+]
+
+// The reply is in the main language, but its turn's note is not: the reply
+// keeps buttons for the turn, and they switch the note.
+test(
+  'a Chinese reply with English notes keeps the buttons for its turn',
+  {
+    options: {
+      languages: 'zh-CN, en',
+      primaryLanguage: 'zh-CN',
+      replaceOriginal: true,
+      skipPrimaryReplies: true,
+      translateAll: true,
+    },
+  },
+  async ($, on) => {
+    let messages: Message[] = [...MESSAGES]
+    const { asked, store } = engine(on, { messages: () => messages })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    messages = [...MESSAGES, ...MIXED_TURN]
+    await $.turn.complete({ answer: FINAL_ZH_NEXT, durationMs: 1, isAborted: false, turnId: 't4', reason: 'answer' })
+    const key = `t:${fingerprint(NOTE)}`
+    const waiting = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+    for (let i = 0; i < 200 && !store.has(key); i++) {
+      await waiting.find({ type: 'Text' })
+    }
+    await waiting.unmount()
+    // Only the note: the reply is Chinese already.
+    expect(asked).toHaveLength(1)
+
+    const note = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(note)).toEqual(['ZH-TEXT'])
+    expect(await note.find({ type: 'Button' })).toBeUndefined()
+    await note.unmount()
+
+    const final = await $.ui.mount({ ...reply(FINAL_ZH_NEXT), surface: 'desktop' })
+    expect(await drawn(final)).toEqual([FINAL_ZH_NEXT])
+    expect(await final.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
+    expect(await final.find({ type: 'Button', text: /Copy/ })).toBeUndefined()
+    const showOriginal = await final.find({ type: 'Button', text: /Show original/ })
+    await final.press({ key: String(showOriginal?.key) })
+    const original = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(original)).toEqual([NOTE])
+    await original.unmount()
+    expect(await final.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+
+    // English for the turn: the reply is translated, the note is English.
+    const english = await final.find({ type: 'Button', text: /English/ })
+    await final.press({ key: String(english?.key) })
+    expect(asked).toHaveLength(2)
+    expect(await drawn(final)).toEqual(['EN-TEXT'])
+    const inEnglish = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(inEnglish)).toEqual([NOTE])
+    await inEnglish.unmount()
+    await final.unmount()
+  },
+)
+
+// The band counts replies, not notes, and acts on whole turns.
+test(
+  'with translateAll the band counts replies and translates their notes too',
+  { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', replaceOriginal: true, translateAll: true } },
+  async ($, on) => {
+    const { asked } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    const row = await $.ui.mount(band)
+    expect(await row.find({ type: 'Text', text: /Last 3 replies/ })).toBeDefined()
+    const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+    await row.press({ key: String(showAll?.key) })
+    expect(asked).toHaveLength(3)
+    const note = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect(await drawn(note)).toEqual(['ZH-TEXT'])
+    await note.unmount()
+    await row.unmount()
+  },
+)
+
 
 test('the band above the prompt shows and hides the translations of the last replies at once', REPLACING, async ($, on) => {
   const { asked } = engine(on)

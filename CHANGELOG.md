@@ -2,6 +2,22 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.9.0 (2026-11-16)
+
+### Added
+
+- `translateAll` (default `false`): the notes Claude writes between tool calls while it works are translated too, not only its final reply.
+  - A note gets no buttons of its own. The buttons under its turn's final reply act on the whole turn: a language puts every note and the reply in it, and **Show original** or **Hide translation** covers them all.
+  - A reply in the main language keeps its buttons when its turn's notes are in another language.
+  - With a main language set, each note is translated as soon as the tool call after it starts, so the notes of a long turn read in your language while it runs.
+  - The row above the prompt acts on whole turns and counts replies, not notes.
+  - Notes a model writes as thinking that the desktop shows as text are left as they are: the desktop draws them itself, where a mod cannot draw a translation over them. Thinking is never translated.
+
+### Fixed
+
+- As a turn ends, only that turn's replies are translated ahead, each once. A reply of an earlier turn that the mod meets only then, such as one in a history that loaded late, waits for a press instead of costing a call.
+- The translations made as a turn ends run at most four at a time.
+
 ## 0.8.0 (2026-11-15)
 
 ### Added

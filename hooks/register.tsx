@@ -1,9 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, Reply } from '../types'
+import type { Group, Note, Reply, Turns } from '../types'
 
-const MAX_FINALS = 1000
+// How many blocks with buttons the session remembers. With translateAll a
+// long session has a block for every note Claude wrote between tool calls.
+const MAX_FINALS = 5000
 
 // What `languages` falls back to when none of its entries reads as a language.
 const FALLBACK_TARGETS = 'en'
@@ -26,6 +28,8 @@ const STORE_INDEX = 'index'
 // nothing.
 const HOVER_STRIP_ROWS = 2
 
+// The fingerprints of the blocks that get buttons: the final replies' blocks,
+// and with translateAll every other text block of Claude's too.
 const finals = atom({ plugin: 'reply-translate', key: 'finals' } as const, [], {
   shape: 'finals-1',
 })
@@ -34,6 +38,11 @@ const finals = atom({ plugin: 'reply-translate', key: 'finals' } as const, [], {
 // to and whether it is the last, which draws the buttons and holds the text.
 const groups = atom({ plugin: 'reply-translate', key: 'groups' } as const, {}, {
   shape: 'groups-1',
+})
+
+// Under translateAll, how each turn's notes hang on its final reply.
+const turns = atom({ plugin: 'reply-translate', key: 'turns' } as const, { noteOf: {}, notesOf: {} }, {
+  shape: 'turns-1',
 })
 
 const uiLocale = { plugin: 'reply-translate', key: 'uiLocale' } as const
@@ -72,6 +81,8 @@ type Settings = {
   // How many of the latest final replies the band above the prompt acts on;
   // 0 draws no band.
   controlRange: number
+  // Every text block of Claude's gets buttons, not only the final replies.
+  translateAll: boolean
 }
 
 const DEFAULT_CONTROL_RANGE = 10
@@ -545,20 +556,37 @@ export function fingerprint(text: string): string {
 
 // A model response that calls no tool ends its turn, so its text blocks are the
 // final reply; text in a response that also calls a tool is work in progress.
-// Answers each final reply as the list of its non-empty text blocks.
-async function finalReplies($: EngineInterface): Promise<string[][]> {
+// Thinking is never a unit, not even the notes a model writes as thinking
+// that the desktop shows as text: the desktop draws those itself, outside
+// the components a mod draws, so a translation could not take their place.
+
+// A run of Claude's text the buttons stand under: a final reply (the text of
+// a response that calls no tool, all its blocks together), or with
+// translateAll one text block of a response that calls a tool. `turn`
+// counts the person's prompts before it.
+type Unit = { blocks: string[]; turn: number; isFinal: boolean }
+
+// Answers the units in the transcript, in order, and the number of the
+// latest turn. A user message that holds no tool result is a prompt and
+// opens a turn.
+async function transcriptUnits($: EngineInterface, all: boolean): Promise<{ units: Unit[]; lastTurn: number }> {
   const messages = await $.session.messages({ as: 'api' })
   if (!Array.isArray(messages)) {
-    return []
+    return { units: [], lastTurn: 0 }
   }
 
-  const found: string[][] = []
+  const units: Unit[] = []
+  let turn = 0
   let pending: string[] = []
   let callsTool = false
   const flush = () => {
     const blocks = pending.filter(text => normalize(text) !== '')
     if (!callsTool && blocks.length > 0) {
-      found.push(blocks)
+      units.push({ blocks, turn, isFinal: true })
+    } else if (all) {
+      for (const block of blocks) {
+        units.push({ blocks: [block], turn, isFinal: false })
+      }
     }
     pending = []
     callsTool = false
@@ -567,6 +595,13 @@ async function finalReplies($: EngineInterface): Promise<string[][]> {
   for (const message of messages) {
     if (message.role === 'user') {
       flush()
+      const content: unknown = message.content
+      const isToolResult =
+        Array.isArray(content) &&
+        content.some(block => typeof block === 'object' && block !== null && 'type' in block && block.type === 'tool_result')
+      if (!isToolResult) {
+        turn += 1
+      }
       continue
     }
     for (const block of message.content) {
@@ -579,11 +614,11 @@ async function finalReplies($: EngineInterface): Promise<string[][]> {
   }
   flush()
 
-  return found
+  return { units, lastTurn: turn }
 }
 
-// A final reply as the buttons and the translation see it: one id and one
-// text for all of its blocks.
+// A unit as the buttons and the translation see it: one id and one text for
+// all of its blocks.
 type FinalReply = { id: string; text: string }
 
 // The blocks of a reply are joined with this to make the text translated.
@@ -599,17 +634,65 @@ function replyOf(blocks: string[]): FinalReply {
   return { id, text }
 }
 
+// The units of one turn: its final replies and its notes, in order. The last
+// final reply is the turn's: its buttons act on the notes too.
+type TurnUnits = { finals: FinalReply[]; notes: FinalReply[] }
+
+function turnsOf(units: Unit[]): TurnUnits[] {
+  const byTurn = new Map<number, TurnUnits>()
+  for (const unit of units) {
+    let entry = byTurn.get(unit.turn)
+    if (entry === undefined) {
+      entry = { finals: [], notes: [] }
+      byTurn.set(unit.turn, entry)
+    }
+    ;(unit.isFinal ? entry.finals : entry.notes).push(replyOf(unit.blocks))
+  }
+
+  return [...byTurn.values()]
+}
+
+// How the notes hang on the final replies, as `turns` keeps it.
+function turnMapOf(units: Unit[]): Turns {
+  const map: Turns = { noteOf: {}, notesOf: {} }
+  for (const turn of turnsOf(units)) {
+    if (turn.notes.length === 0) {
+      continue
+    }
+    const final = turn.finals[turn.finals.length - 1]
+    for (const note of turn.notes) {
+      map.noteOf[note.id] = final?.id ?? ''
+    }
+    if (final !== undefined) {
+      map.notesOf[final.id] = turn.notes.map((note): Note => {
+        const language = replyLanguage(note.text)
+
+        return language === undefined ? { id: note.id } : { id: note.id, language }
+      })
+    }
+  }
+
+  return map
+}
+
 // Records the final replies not yet known and answers them. A reply of one
 // block keeps that block's fingerprint as its id; a reply of several gets the
 // fingerprint of its joined text, and each of its blocks a `groups` entry, so
 // only the last block draws the buttons, for the whole reply.
-async function refresh($: EngineInterface, answer?: string): Promise<FinalReply[]> {
-  const found = await finalReplies($)
+// Under translateAll every unit is recorded, and `turns` with them. Answers
+// every unit of the latest turn.
+async function refresh($: EngineInterface, all: boolean, answer?: string): Promise<FinalReply[]> {
+  const { units, lastTurn } = await transcriptUnits($, all)
+  const turnMap = turnMapOf(units)
+  if (JSON.stringify(turnMap) !== JSON.stringify(await read($, turns))) {
+    await update($, turns, (): Turns => turnMap)
+  }
+  const latest = units.filter(unit => unit.turn === lastTurn).map(unit => replyOf(unit.blocks))
   const known = new Set(await read($, finals))
   const fresh: FinalReply[] = []
   const freshBlocks: string[] = []
   const freshGroups: Record<string, Group> = {}
-  for (const blocks of found) {
+  for (const { blocks } of units) {
     const blockIds = blocks.map(fingerprint)
     if (blockIds.every(blockId => known.has(blockId) || freshBlocks.includes(blockId))) {
       continue
@@ -631,10 +714,13 @@ async function refresh($: EngineInterface, answer?: string): Promise<FinalReply[
     if (!known.has(id)) {
       freshBlocks.push(id)
       fresh.push({ id, text: answer })
+      if (latest.length === 0) {
+        latest.push({ id, text: answer })
+      }
     }
   }
   if (freshBlocks.length === 0) {
-    return []
+    return latest
   }
   await update($, finals, list => [...list, ...freshBlocks.filter(blockId => !list.includes(blockId))].slice(-MAX_FINALS))
   if (Object.keys(freshGroups).length > 0) {
@@ -651,7 +737,7 @@ async function refresh($: EngineInterface, answer?: string): Promise<FinalReply[
     })
   }
 
-  return fresh
+  return latest
 }
 
 // The buttons follow the plugin's uiLanguage, else Claude Code's `language`
@@ -920,6 +1006,37 @@ async function prefetch($: EngineInterface, model: string, id: string, text: str
   await keep($, id)
 }
 
+// The translations into the main language that the latest turn's units are
+// due as they come: one each for those nothing was asked of yet, all of a
+// reply's blocks together. With autoExpand or replaceOriginal the
+// translation is the one a press makes, so it shows its progress and opens
+// by itself, under the unit or in its place; else it is made ahead of time.
+async function aheadTasks(
+  $: EngineInterface,
+  settings: Settings,
+  primary: Target,
+  latest: FinalReply[],
+): Promise<(() => Promise<unknown>)[]> {
+  const isShown = settings.autoExpand || settings.replaceOriginal
+  const tasks: (() => Promise<unknown>)[] = []
+  for (const { id, text } of latest) {
+    const reply = await currentReply($, id, text)
+    if (needsPrefetch(text, primary) && reply?.status === undefined && reply?.prefetching === undefined) {
+      tasks.push(() =>
+        isShown ? translate($, settings.model, id, text, primary) : prefetch($, settings.model, id, text, primary),
+      )
+    }
+  }
+
+  return tasks
+}
+
+// Records the notes written so far in the turn and translates them.
+async function catchUp($: EngineInterface, settings: Settings, primary: Target) {
+  const latest = await refresh($, true)
+  await runLimited(await aheadTasks($, settings, primary, latest), CONTROL_PARALLEL)
+}
+
 // Whether a fresh final reply is worth translating ahead of time.
 function needsPrefetch(text: string, primary: Target): boolean {
   return normalize(text).length >= PREFETCH_MIN_CHARS && replyLanguage(text) !== primary.family
@@ -943,14 +1060,44 @@ function controlRangeOf(value: unknown): number {
   return Number.isFinite(count) && count >= 0 ? Math.floor(count) : DEFAULT_CONTROL_RANGE
 }
 
-// The last `count` final replies in the transcript, oldest first. Only these
-// are touched, so a long conversation costs no more than a short one.
-async function recentReplies($: EngineInterface, count: number): Promise<FinalReply[]> {
+// The targets a turn is offered: those that at least one of its units is not
+// written in, in the configured order, so the first is the main button; all
+// of them when none is left. A turn of one reply is offered what the reply is.
+function turnTargets(targets: Target[], languages: (string | undefined)[]): Target[] {
+  const others = targets.filter(target =>
+    languages.some(language => language === undefined || target.family !== language),
+  )
+
+  return others.length > 0 ? others : targets
+}
+
+// The last `count` turns that hold units, oldest first, each as the units the
+// band acts on: its notes, then its final replies. Only these are touched,
+// so a long conversation costs no more than a short one.
+async function recentTurns($: EngineInterface, count: number, all: boolean): Promise<FinalReply[][]> {
   if (count <= 0) {
     return []
   }
 
-  return (await finalReplies($)).slice(-count).map(replyOf)
+  return turnsOf((await transcriptUnits($, all)).units)
+    .slice(-count)
+    .map(turn => [...turn.notes, ...turn.finals])
+}
+
+// The units a final reply's buttons act on: the notes of its turn, then the
+// reply. Without translateAll, or for a reply that is not its turn's last,
+// the reply alone.
+async function turnOfReply($: EngineInterface, all: boolean, id: string, text: string): Promise<FinalReply[]> {
+  if (all) {
+    for (const turn of turnsOf((await transcriptUnits($, true)).units)) {
+      const final = turn.finals[turn.finals.length - 1]
+      if (final !== undefined && final.id === id) {
+        return [...turn.notes, final]
+      }
+    }
+  }
+
+  return [{ id, text }]
 }
 
 // Runs the tasks with at most `limit` of them at a time.
@@ -966,39 +1113,82 @@ async function runLimited(tasks: (() => Promise<unknown>)[], limit: number) {
   await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
 }
 
-// Opens a translation on each of the last few replies, as its own buttons
+// A translation that was open and is hidden now: a press shows it again.
+function hasHiddenTranslation(reply: Reply | undefined): boolean {
+  return (
+    reply?.status === 'done' &&
+    reply.isHidden &&
+    reply.language !== undefined &&
+    reply.texts[reply.language] !== undefined
+  )
+}
+
+// Puts a final reply's whole turn in `target`, as a press on its buttons does:
+// a unit written in that language shows as it is, the rest are translated, a
+// kept translation costing no call, a few at a time.
+async function translateTurn($: EngineInterface, settings: Settings, id: string, text: string, target: Target) {
+  const tasks: (() => Promise<unknown>)[] = []
+  for (const unit of await turnOfReply($, settings.translateAll, id, text)) {
+    if (target.family !== undefined && replyLanguage(unit.text) === target.family) {
+      if (isShowing(await currentReply($, unit.id, unit.text))) {
+        tasks.push(() => setHidden($, unit.id, true))
+      }
+      continue
+    }
+    tasks.push(() => translate($, settings.model, unit.id, unit.text, target))
+  }
+  await runLimited(tasks, CONTROL_PARALLEL)
+}
+
+// Hides the open translations of a turn's units, or shows again those hidden.
+async function setTurnHidden($: EngineInterface, ids: string[], isHidden: boolean) {
+  for (const id of ids) {
+    const reply = await currentReply($, id)
+    if (isHidden ? isShowing(reply) : hasHiddenTranslation(reply)) {
+      await setHidden($, id, isHidden)
+    }
+  }
+}
+
+// Opens a translation on each unit of the last few turns, as their buttons
 // would: one shown before shows again, in the language it was in; else the
-// reply is translated into its main target, a kept translation costing no
-// call. With a main language, replies already in it are left as they are.
+// unit is translated into the main language, or without one into the turn's
+// main target, a kept translation costing no call. A unit already in that
+// language is left as it is.
 async function showAllTranslations($: EngineInterface, settings: Settings, ui: string) {
   const targets = targetsFor(settings, ui)
   const tasks: (() => Promise<unknown>)[] = []
-  for (const { id, text } of await recentReplies($, settings.controlRange)) {
-    if (settings.primary !== undefined && replyLanguage(text) === settings.primary.family) {
+  for (const units of await recentTurns($, settings.controlRange, settings.translateAll)) {
+    const target = settings.primary ?? turnTargets(targets, units.map(unit => replyLanguage(unit.text)))[0]
+    if (target === undefined) {
       continue
     }
-    const reply = await currentReply($, id, text)
-    if (reply?.status === 'running' || isShowing(reply)) {
-      continue
-    }
-    if (reply?.status === 'done' && reply.language !== undefined && reply.texts[reply.language] !== undefined) {
-      tasks.push(() => setHidden($, id, false))
-      continue
-    }
-    const target = offeredTargets(targets, text)[0]
-    if (target !== undefined) {
+    for (const { id, text } of units) {
+      if (target.family !== undefined && replyLanguage(text) === target.family) {
+        continue
+      }
+      const reply = await currentReply($, id, text)
+      if (reply?.status === 'running' || isShowing(reply)) {
+        continue
+      }
+      if (hasHiddenTranslation(reply)) {
+        tasks.push(() => setHidden($, id, false))
+        continue
+      }
       tasks.push(() => translate($, settings.model, id, text, target))
     }
   }
   await runLimited(tasks, CONTROL_PARALLEL)
 }
 
-// Closes the open translation of each of the last few replies: the original
-// shows again, and each translation stays a press away.
+// Closes the open translation of each unit of the last few turns: the
+// original shows again, and each translation stays a press away.
 async function hideAllTranslations($: EngineInterface, settings: Settings) {
-  for (const { id, text } of await recentReplies($, settings.controlRange)) {
-    if (isShowing(await currentReply($, id, text))) {
-      await setHidden($, id, true)
+  for (const units of await recentTurns($, settings.controlRange, settings.translateAll)) {
+    for (const { id, text } of units) {
+      if (isShowing(await currentReply($, id, text))) {
+        await setHidden($, id, true)
+      }
     }
   }
 }
@@ -1026,42 +1216,60 @@ export const register: Register = (on, options) => {
     // Buttons always show unless alwaysShowButtons is turned off.
     showOnHover: options.alwaysShowButtons === false || String(options.alwaysShowButtons).toLowerCase() === 'false',
     controlRange: controlRangeOf(options.controlRange),
+    translateAll: options.translateAll === true || String(options.translateAll).toLowerCase() === 'true',
   }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await refreshUiLanguage($, settings.uiLanguage)
-    await refresh($)
+    await refresh($, settings.translateAll)
     for (const ms of RESCAN_MS) {
       $.clock.after(ms, () => {
-        refresh($).catch(() => undefined)
+        refresh($, settings.translateAll).catch(() => undefined)
       })
     }
 
     return started
   })
 
+  // Under translateAll a note is done once the call after it starts, so the
+  // notes of a long turn are translated as they come, not all at its end.
+  // One catch-up at a time, on a timer: the call waits for none of it.
+  let isCatchingUp = false
+  on('tool.call', async ($, e, next) => {
+    const primary = settings.primary
+    if (settings.translateAll && primary !== undefined && e.agentId === undefined && !isCatchingUp) {
+      isCatchingUp = true
+      $.clock.after(1, () => {
+        catchUp($, settings, primary)
+          .catch(() => undefined)
+          .finally(() => {
+            isCatchingUp = false
+          })
+      })
+    }
+
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) {
-      const fresh = await refresh($, e.answer)
+      const latest = await refresh($, settings.translateAll, e.answer)
       await refreshUiLanguage($, settings.uiLanguage)
       const primary = settings.primary
       if (primary !== undefined && e.reason === 'answer') {
-        // One call per new reply, all of its blocks together. The calls run
-        // on a timer, so the turn's end waits for none of them. With
-        // autoExpand or replaceOriginal the translation is the one a press
-        // makes, so it shows its progress and opens by itself, under the
-        // reply or in its place.
-        for (const { id, text } of fresh) {
-          if (needsPrefetch(text, primary)) {
-            $.clock.after(1, () => {
-              const work = settings.autoExpand || settings.replaceOriginal
-                ? translate($, settings.model, id, text, primary)
-                : prefetch($, settings.model, id, text, primary)
-              work.catch(() => undefined)
-            })
-          }
+        // One call per unit of this turn that nothing was asked of yet, all
+        // of a reply's blocks together; a unit of an earlier turn waits for
+        // a press. The calls run on a timer, so the turn's end waits for none
+        // of them, a few at a time. With autoExpand or replaceOriginal the
+        // translation is the one a press makes, so it shows its progress and
+        // opens by itself, under the reply or in its place.
+        const tasks = await aheadTasks($, settings, primary, latest)
+        if (tasks.length > 0) {
+          $.clock.after(1, () => {
+            runLimited(tasks, CONTROL_PARALLEL).catch(() => undefined)
+          })
         }
       }
     }
@@ -1079,6 +1287,46 @@ export const register: Register = (on, options) => {
     const known = await read($, finals)
     if (!known.includes(blockId)) {
       return next(e)
+    }
+
+    // Under translateAll a note written between tool calls draws no buttons:
+    // its turn's final reply has them, for the whole turn. The note shows its
+    // own translation, in its place or under it as a reply does, and its
+    // progress and failure.
+    const turnMap = await read($, turns)
+    if (turnMap.noteOf[blockId] !== undefined) {
+      const note = await currentReply($, blockId, blockText)
+      const replacement =
+        replacesOriginal(settings, note) && note?.language !== undefined ? note.texts[note.language] : undefined
+      if (replacement !== undefined) {
+        return next({ ...e, props: { ...e.props, text: replacement } })
+      }
+      if (note === undefined || note.status === undefined || (note.status === 'done' && !isShowing(note))) {
+        return next(e)
+      }
+      const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
+      const s = STRINGS[ui] ?? EN
+      const name = note.language === undefined ? '' : nameOf(note.language, ui)
+      const original = await next(e)
+      const { Box, Markdown, Progress, Text } = $.ui.resolve(e)
+      const panel =
+        note.status === 'running' ? (
+          <Progress label={`${s.translating} · ${name}`} />
+        ) : note.status === 'error' ? (
+          <Text color="error">{s.failed.replace('{reason}', s.reasons[note.error ?? ''] ?? note.error ?? '')}</Text>
+        ) : (
+          <Box flexDirection="column" borderStyle="round" paddingX={1}>
+            <Text dimColor>{`${s.translation} · ${name}`}</Text>
+            <Markdown text={note.texts[note.language ?? ''] ?? ''} />
+          </Box>
+        )
+
+      return (
+        <Box key={`note-${blockId}`} flexDirection="column">
+          {original}
+          <Box marginTop="sm">{panel}</Box>
+        </Box>
+      )
     }
 
     // A reply of several blocks draws one set of buttons, under its last
@@ -1107,14 +1355,25 @@ export const register: Register = (on, options) => {
     const text = group?.text ?? blockText
 
     const reply = await currentReply($, id, text)
-    // A reply in the main language needs no translation: leave it as the
-    // engine draws it, unless a translation of it was asked for already.
+    // Under translateAll the notes of the reply's turn go with it: its
+    // buttons show the turn's state and act on all of its units.
+    const notes = settings.translateAll ? (turnMap.notesOf[id] ?? []) : []
+    const noteReplies: (Reply | undefined)[] = []
+    for (const note of notes) {
+      noteReplies.push(await currentReply($, note.id))
+    }
+    const units = [reply, ...noteReplies]
+    const ownLanguage = replyLanguage(text)
+    // A turn in the main language needs no translation: leave the reply as
+    // the engine draws it, unless a translation of the turn was asked for
+    // already.
     const primary = settings.primary
     if (
       settings.skipPrimaryReplies &&
       primary !== undefined &&
-      reply?.status === undefined &&
-      replyLanguage(text) === primary.family
+      ownLanguage === primary.family &&
+      notes.every(note => note.language === undefined || note.language === primary.family) &&
+      units.every(unit => unit?.status === undefined)
     ) {
       return next(e)
     }
@@ -1129,80 +1388,102 @@ export const register: Register = (on, options) => {
     const { Box, Button, Markdown, Progress, Text } = $.ui.resolve(e)
 
     const targets = targetsFor(settings, ui)
-    const offered = offeredTargets(targets, text)
+    const offered = turnTargets(targets, [ownLanguage, ...notes.map(note => note.language)])
     const targetOf = (key: string | undefined): Target | undefined =>
       targets.find(target => target.key === key) ??
       (key === undefined ? undefined : { key, promptName: key })
     const label = (target: Target) => (target.family === undefined ? target.key : nameOf(target.key, ui))
-    const current = targetOf(reply?.language)
+    // The language the turn was last put in: that of any unit asked of.
+    const current = targetOf(units.find(unit => unit?.status !== undefined && unit.language !== undefined)?.language)
+    const ids = [...notes.map(note => note.id), id]
     const toButton = (target: Target, isMain: boolean) => (
       <Button
         key={`to-${target.key}-${id}`}
         label={isMain ? `${s.translate} · ${label(target)}` : label(target)}
         dimColor={!isMain}
-        onPress={() => translate($, settings.model, id, text, target)}
+        onPress={() => translateTurn($, settings, id, text, target)}
       />
     )
     const others = offered.filter(target => target.key !== current?.key).map(target => toButton(target, false))
+    const failed = units.find(unit => unit?.status === 'error')
 
     let panel
     let toolbar
-    // While a translation is open its buttons stay, hover or not.
+    // While a translation of the turn is open its buttons stay, hover or not.
     let isOpen = false
     // With replaceOriginal, an open translation is drawn where the reply was.
     const isReplaced = replacement !== undefined
-    if (reply === undefined || reply.status === undefined || current === undefined) {
+    if (current === undefined) {
       toolbar = offered.map((target, i) => toButton(target, i === 0))
-    } else if (reply.status === 'running') {
-      panel = <Progress label={`${s.translating} · ${label(current)}`} />
-    } else if (reply.status === 'error') {
-      const reason = s.reasons[reply.error ?? ''] ?? reply.error ?? ''
-      panel = (
-        <Box flexDirection="row" gap="sm">
-          <Text color="error">{s.failed.replace('{reason}', reason)}</Text>
-          <Button
-            key={`retry-${id}`}
-            label={s.retry}
-            dimColor
-            onPress={() => translate($, settings.model, id, text, current)}
-          />
-        </Box>
+    } else if (units.some(unit => unit?.status === 'running')) {
+      // Each unit shows its own progress; the buttons wait for them all.
+      if (reply?.status === 'running') {
+        panel = <Progress label={`${s.translating} · ${label(current)}`} />
+      }
+    } else if (failed !== undefined) {
+      const retry = (
+        <Button
+          key={`retry-${id}`}
+          label={s.retry}
+          dimColor
+          onPress={() => translateTurn($, settings, id, text, current)}
+        />
       )
-      toolbar = others
-    } else if (reply.isHidden || reply.texts[current.key] === undefined) {
-      toolbar = [
-        <Button key={`show-${id}`} label={s.show} onPress={() => setHidden($, id, false)} />,
-        ...others,
-      ]
-    } else {
-      const translated = reply.texts[current.key] ?? ''
+      if (reply?.status === 'error') {
+        const reason = s.reasons[failed.error ?? ''] ?? failed.error ?? ''
+        panel = (
+          <Box flexDirection="row" gap="sm">
+            <Text color="error">{s.failed.replace('{reason}', reason)}</Text>
+            {retry}
+          </Box>
+        )
+        toolbar = others
+      } else {
+        // A note failed: it says why under itself.
+        toolbar = [retry, ...others]
+      }
+    } else if (units.some(isShowing)) {
       isOpen = true
-      const heading = <Text dimColor>{`${s.translation} · ${label(current)}`}</Text>
-      // In the reply's place the engine draws the translation (`drawn`), so
-      // the panel is its heading alone.
-      panel = isReplaced ? (
-        heading
-      ) : (
-        <Box flexDirection="column" borderStyle="round" paddingX={1}>
-          {heading}
-          <Markdown text={translated} />
-        </Box>
-      )
+      const translated = isShowing(reply) ? reply?.texts[current.key] : undefined
+      if (translated !== undefined) {
+        const heading = <Text dimColor>{`${s.translation} · ${label(current)}`}</Text>
+        // In the reply's place the engine draws the translation (`drawn`), so
+        // the panel is its heading alone.
+        panel = isReplaced ? (
+          heading
+        ) : (
+          <Box flexDirection="column" borderStyle="round" paddingX={1}>
+            {heading}
+            <Markdown text={translated} />
+          </Box>
+        )
+      }
       toolbar = [
         <Button
           key={`hide-${id}`}
-          label={isReplaced ? s.showOriginal : s.hide}
+          label={settings.replaceOriginal ? s.showOriginal : s.hide}
           dimColor
-          onPress={() => setHidden($, id, true)}
+          onPress={() => setTurnHidden($, ids, true)}
         />,
-        <Button
-          key={`copy-${id}`}
-          label={s.copy}
-          dimColor
-          onPress={press => copyText($, translated, press.surface, s.copied)}
-        />,
+        ...(translated === undefined
+          ? []
+          : [
+              <Button
+                key={`copy-${id}`}
+                label={s.copy}
+                dimColor
+                onPress={press => copyText($, translated, press.surface, s.copied)}
+              />,
+            ]),
         ...others,
       ]
+    } else if (units.some(hasHiddenTranslation)) {
+      toolbar = [
+        <Button key={`show-${id}`} label={s.show} onPress={() => setTurnHidden($, ids, false)} />,
+        ...others,
+      ]
+    } else {
+      toolbar = offered.map((target, i) => toButton(target, i === 0))
     }
 
     // On the desktop the buttons show while the pointer is over the reply, in
@@ -1250,10 +1531,12 @@ export const register: Register = (on, options) => {
     if (settings.controlRange <= 0 || e.props.hasSurvey || e.props.view.agentId !== undefined) {
       return next(e)
     }
-    // Replies with buttons: a block of its own, or the last block of a reply.
+    // Replies with buttons: a block of its own, or the last block of a reply;
+    // a note goes with its reply and is not counted.
     const known = await read($, finals)
     const grouped = await read($, groups)
-    const count = known.filter(blockId => grouped[blockId]?.isLast !== false).length
+    const noteOf = (await read($, turns)).noteOf
+    const count = known.filter(blockId => grouped[blockId]?.isLast !== false && noteOf[blockId] === undefined).length
     if (count === 0) {
       return next(e)
     }

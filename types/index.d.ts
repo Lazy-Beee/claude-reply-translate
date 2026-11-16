@@ -26,11 +26,25 @@ export type Group = {
   text?: string
 }
 
+// A note Claude wrote between tool calls, under translateAll: its block's
+// fingerprint, and the language it is written in when that is recognised.
+export type Note = { id: string; language?: string }
+
+// How each turn's notes hang on the turn's final reply, under translateAll:
+// the reply's buttons act on the whole turn, and the notes draw none.
+export type Turns = {
+  // A note's id: its turn's final reply's id, or '' when the turn has none.
+  noteOf: Record<string, string>
+  // A final reply's id: the notes of its turn, in order.
+  notesOf: Record<string, Note[]>
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'reply-translate': {
       finals: Shaped<string[]>
       groups: Shaped<Record<string, Group>>
+      turns: Shaped<Turns>
       // The language the buttons are drawn in: a key of the strings table.
       uiLocale: string
       replies: StateFamily<Reply>
