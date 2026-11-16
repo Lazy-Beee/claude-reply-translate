@@ -92,6 +92,10 @@ const DEFAULT_CONTROL_RANGE = 10
 // Translations the band starts at once; the rest wait their turn.
 const CONTROL_PARALLEL = 4
 
+// The button that makes a turn's translation again: after a failure, or
+// over one that came out wrong. A glyph, as a browser's reload is.
+const REFRESH = '\u21BB'
+
 // The label of the button marked as a turn's mode: a check before its name.
 // The desktop draws its own native buttons: of a Button's look it takes the
 // primary variant (which stood out too much) and the dim label, and drew
@@ -117,7 +121,6 @@ type Strings = {
   // The band above the prompt that acts on the last few replies at once.
   recent: string
   recentOne: string
-  retry: string
   failed: string
   reasons: Record<string, string>
 }
@@ -130,13 +133,13 @@ const EN: Strings = {
   translatedMark: '(translated)',
   recent: 'Last {count} replies',
   recentOne: 'Last reply',
-  retry: 'Retry',
   failed: 'Translation failed: {reason}',
   reasons: {
     'api-error': 'API error',
     'empty-reply': 'empty reply',
     aborted: 'timed out or cancelled',
     untranslated: 'the reply came back untranslated',
+    incomplete: 'the translation came back incomplete',
   },
 }
 
@@ -150,13 +153,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '（译文）',
     recent: '最近 {count} 条回复',
     recentOne: '最近 1 条回复',
-    retry: '重试',
     failed: '翻译失败：{reason}',
     reasons: {
       'api-error': '接口出错',
       'empty-reply': '返回为空',
       aborted: '超时或已取消',
       untranslated: '返回的仍是原文',
+      incomplete: '译文不完整',
     },
   },
   'zh-Hant': {
@@ -167,13 +170,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '（譯文）',
     recent: '最近 {count} 則回覆',
     recentOne: '最近 1 則回覆',
-    retry: '重試',
     failed: '翻譯失敗：{reason}',
     reasons: {
       'api-error': '介面出錯',
       'empty-reply': '回應為空',
       aborted: '逾時或已取消',
       untranslated: '回傳的仍是原文',
+      incomplete: '譯文不完整',
     },
   },
   ja: {
@@ -184,13 +187,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '（翻訳）',
     recent: '直近 {count} 件の返信',
     recentOne: '直近の返信',
-    retry: '再試行',
     failed: '翻訳に失敗しました：{reason}',
     reasons: {
       'api-error': 'API エラー',
       'empty-reply': '空の応答',
       aborted: 'タイムアウトまたはキャンセル',
       untranslated: '原文のまま返されました',
+      incomplete: '訳文が不完全です',
     },
   },
   ko: {
@@ -201,13 +204,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '(번역문)',
     recent: '최근 답변 {count}개',
     recentOne: '최근 답변',
-    retry: '다시 시도',
     failed: '번역 실패: {reason}',
     reasons: {
       'api-error': 'API 오류',
       'empty-reply': '빈 응답',
       aborted: '시간 초과 또는 취소됨',
       untranslated: '원문 그대로 반환됨',
+      incomplete: '번역이 불완전함',
     },
   },
   es: {
@@ -218,13 +221,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '(traducido)',
     recent: 'Últimas {count} respuestas',
     recentOne: 'Última respuesta',
-    retry: 'Reintentar',
     failed: 'Error al traducir: {reason}',
     reasons: {
       'api-error': 'error de la API',
       'empty-reply': 'respuesta vacía',
       aborted: 'tiempo agotado o cancelado',
       untranslated: 'la respuesta volvió sin traducir',
+      incomplete: 'la traducción llegó incompleta',
     },
   },
   fr: {
@@ -235,13 +238,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '(traduit)',
     recent: 'Les {count} dernières réponses',
     recentOne: 'La dernière réponse',
-    retry: 'Réessayer',
     failed: 'Échec de la traduction : {reason}',
     reasons: {
       'api-error': "erreur de l'API",
       'empty-reply': 'réponse vide',
       aborted: 'délai dépassé ou annulé',
       untranslated: 'la réponse est revenue non traduite',
+      incomplete: 'la traduction est revenue incomplète',
     },
   },
   de: {
@@ -252,13 +255,13 @@ const STRINGS: Record<string, Strings> = {
     translatedMark: '(übersetzt)',
     recent: 'Letzte {count} Antworten',
     recentOne: 'Letzte Antwort',
-    retry: 'Erneut versuchen',
     failed: 'Übersetzung fehlgeschlagen: {reason}',
     reasons: {
       'api-error': 'API-Fehler',
       'empty-reply': 'leere Antwort',
       aborted: 'Zeitüberschreitung oder abgebrochen',
       untranslated: 'Antwort kam unübersetzt zurück',
+      incomplete: 'Übersetzung kam unvollständig zurück',
     },
   },
 }
@@ -429,19 +432,30 @@ function familyOf(key: string): string {
   return (key.split('-')[0] ?? key).toLowerCase()
 }
 
+// What was wrong with a first answer, which the second ask names: it came
+// back in the reply's own language, or far shorter than the reply.
+type Retry = 'untranslated' | 'incomplete'
+
 // `source` names the reply's own language when it is recognised, so the
-// model does not take Japanese written in kanji for Chinese. `isRetry` is the
-// second ask, after a first answer came back in the reply's own language.
-function systemPrompt(language: string, source: string | undefined, isRetry: boolean): string {
+// model does not take Japanese written in kanji for Chinese. `retry` is set
+// on the second ask, after a first answer that was no translation.
+function systemPrompt(language: string, source: string | undefined, retry: Retry | undefined): string {
   return [
     'You translate the replies an AI coding assistant wrote in a coding session.',
     `Translate the text inside <reply> into ${language}.`,
     ...(source === undefined ? [] : [`The reply is written in ${source}: translate every sentence of it.`]),
     `Only quoted words or phrases already in ${language} stay as they are.`,
-    ...(isRetry ? [`An earlier answer handed the reply back untranslated. Write the translation in ${language}.`] : []),
+    ...(retry === 'untranslated'
+      ? [`An earlier answer handed the reply back untranslated. Write the translation in ${language}.`]
+      : []),
+    ...(retry === 'incomplete'
+      ? [
+          'An earlier answer was no full translation: it described the task, or left most of the reply out. Translate the whole reply, from its first sentence to its last.',
+        ]
+      : []),
     'Keep the Markdown structure. Leave code blocks, inline code, commands, file paths, URLs and identifiers unchanged.',
-    `Write the whole translation inside ${TRANSLATION_OPEN}${TRANSLATION_CLOSE} tags.`,
-    'Write nothing outside those tags: no remarks about the text, no notes on how you translated it.',
+    `Start your answer with ${TRANSLATION_OPEN} and write the whole translation inside ${TRANSLATION_OPEN}${TRANSLATION_CLOSE} tags.`,
+    'Write nothing outside those tags: no remarks about the text, no plan, no notes on how you translated it.',
   ].join('\n')
 }
 
@@ -456,6 +470,29 @@ function untranslatedKeys(source: string, texts: Record<string, string>): string
 
   return Object.entries(texts)
     .filter(([key, text]) => familyOf(key) !== own && replyLanguage(text) === own)
+    .map(([key]) => key)
+}
+
+// A translation far shorter than its reply is none: seen in use, Haiku
+// answered a 2,000-character note with a remark on how it would translate it.
+// Prose takes at least this share of its length in another language (Chinese
+// for English runs to about a third); a short reply is not held to it.
+const MIN_LENGTH_SHARE = 0.15
+const LONG_REPLY = 200
+
+function isTooShort(source: string, translated: string): boolean {
+  const length = normalize(source).length
+
+  return length >= LONG_REPLY && normalize(translated).length < length * MIN_LENGTH_SHARE
+}
+
+// The keys of the translations of no use: still in the reply's own language,
+// or far too short to be all of it.
+function unusableKeys(source: string, texts: Record<string, string>): string[] {
+  const untranslated = untranslatedKeys(source, texts)
+
+  return Object.entries(texts)
+    .filter(([key, text]) => untranslated.includes(key) || isTooShort(source, text))
     .map(([key]) => key)
 }
 
@@ -775,23 +812,23 @@ async function saveStored($: EngineInterface, id: string, reply: Reply) {
 }
 
 // The reply as the session holds it, else as an earlier session kept it.
-// Given the reply's text, translations still in its own language, which an
-// earlier version kept unchecked, are left out, and a reply that was showing
-// one is offered afresh.
+// Given the reply's text, translations of no use (still in its own language,
+// or far too short), which an earlier version kept unchecked, are left out,
+// and a reply that was showing one is offered afresh.
 async function currentReply($: EngineInterface, id: string, source?: string): Promise<Reply | undefined> {
   const reply = await savedReply($, id)
   if (reply === undefined || source === undefined) {
     return reply
   }
-  const untranslated = untranslatedKeys(source, reply.texts)
-  if (untranslated.length === 0) {
+  const unusable = unusableKeys(source, reply.texts)
+  if (unusable.length === 0) {
     return reply
   }
   const texts = { ...reply.texts }
-  for (const key of untranslated) {
+  for (const key of unusable) {
     delete texts[key]
   }
-  if (reply.status === 'done' && reply.language !== undefined && untranslated.includes(reply.language)) {
+  if (reply.status === 'done' && reply.language !== undefined && unusable.includes(reply.language)) {
     return { isHidden: false, texts }
   }
 
@@ -876,12 +913,15 @@ function withoutPrefetch(reply: Reply): Reply {
   return copy
 }
 
+// Puts a unit in `target`: a translation kept shows with no call, else the
+// model is asked. `isFresh` asks it again whatever was kept, for ↻.
 async function translate(
   $: EngineInterface,
   model: string,
   id: string,
   text: string,
   target: Target,
+  isFresh = false,
 ) {
   const base = await currentReply($, id, text)
   if (base?.status === 'running') {
@@ -891,7 +931,7 @@ async function translate(
   const texts = base?.texts ?? {}
 
   // Translated before, or ahead of time: show it, no model call.
-  if (texts[target.key] !== undefined) {
+  if (!isFresh && texts[target.key] !== undefined) {
     await update($, { ...replies, id }, (value): Reply => ({
       ...(value ?? base ?? empty),
       status: 'done',
@@ -911,7 +951,7 @@ async function translate(
   })
 
   // Being translated ahead of time: wait for that one, which shows it.
-  if (base?.prefetching === target.key) {
+  if (!isFresh && base?.prefetching === target.key) {
     await update($, { ...replies, id }, running)
 
     return
@@ -943,15 +983,16 @@ async function translate(
 type Translation = { isAnswered: true; text: string } | { isAnswered: false; reason: string }
 
 // One translation, checked: an empty answer is an error, and one still in
-// the reply's own language is asked for once more, then given up as
-// untranslated.
+// the reply's own language, or far shorter than the reply, is asked for once
+// more, saying what was wrong, then given up as untranslated or incomplete.
 async function translation($: EngineInterface, model: string, text: string, target: Target): Promise<Translation> {
   const own = replyLanguage(text)
   const source = own === undefined || own === familyOf(target.key) ? undefined : nameOf(own, 'en')
-  for (const isRetry of [false, true]) {
+  let retry: Retry | undefined
+  for (let attempt = 0; attempt < 2; attempt++) {
     const result = await $.model.complete({
       model,
-      system: systemPrompt(target.promptName, source, isRetry),
+      system: systemPrompt(target.promptName, source, retry),
       prompt: `<reply>\n${text}\n</reply>`,
       maxTokens: Math.min(32000, Math.max(2048, Math.ceil(text.length * 1.5))),
       timeoutMs: 180_000,
@@ -963,12 +1004,16 @@ async function translation($: EngineInterface, model: string, text: string, targ
     if (translated === '') {
       return { isAnswered: false, reason: 'empty-reply' }
     }
-    if (untranslatedKeys(text, { [target.key]: translated }).length === 0) {
+    if (untranslatedKeys(text, { [target.key]: translated }).length > 0) {
+      retry = 'untranslated'
+    } else if (isTooShort(text, translated)) {
+      retry = 'incomplete'
+    } else {
       return { isAnswered: true, text: translated }
     }
   }
 
-  return { isAnswered: false, reason: 'untranslated' }
+  return { isAnswered: false, reason: retry ?? 'untranslated' }
 }
 
 // Translates a reply into the person's main language before anyone asks, and
@@ -1145,6 +1190,7 @@ async function languageTasks(
   settings: Settings,
   units: FinalReply[],
   target: Target,
+  isFresh = false,
 ): Promise<(() => Promise<unknown>)[]> {
   const tasks: (() => Promise<unknown>)[] = []
   for (const unit of units) {
@@ -1158,17 +1204,37 @@ async function languageTasks(
       }
       continue
     }
-    tasks.push(() => translate($, settings.model, unit.id, unit.text, target))
+    tasks.push(() => translate($, settings.model, unit.id, unit.text, target, isFresh))
   }
 
   return tasks
 }
 
 // Puts a final reply's whole turn in `target`, as a press on its language
-// does, a few units at a time.
-async function translateTurn($: EngineInterface, settings: Settings, id: string, text: string, target: Target) {
+// does, a few units at a time; `isFresh`, for ↻, asks the model again for
+// each, whatever was kept.
+async function translateTurn(
+  $: EngineInterface,
+  settings: Settings,
+  id: string,
+  text: string,
+  target: Target,
+  isFresh = false,
+) {
   const units = await turnOfReply($, settings.translateAll, id, text)
-  await runLimited(await languageTasks($, settings, units, target), CONTROL_PARALLEL)
+  await runLimited(await languageTasks($, settings, units, target, isFresh), CONTROL_PARALLEL)
+}
+
+// Asks the model again for the units of a turn whose translation failed, as
+// ↻ does after a failure; the rest stay as they are.
+async function retryTurn($: EngineInterface, settings: Settings, id: string, text: string, target: Target) {
+  const failed: FinalReply[] = []
+  for (const unit of await turnOfReply($, settings.translateAll, id, text)) {
+    if ((await currentReply($, unit.id, unit.text))?.status === 'error') {
+      failed.push(unit)
+    }
+  }
+  await runLimited(await languageTasks($, settings, failed, target, true), CONTROL_PARALLEL)
 }
 
 // Hides the open translations of a turn's units: the originals show again,
@@ -1441,16 +1507,16 @@ export const register: Register = (on, options) => {
         panel = <Progress label={`${s.translating} · ${label(running)}`} />
       }
     } else {
-      toolbar = modes
+      // ↻ asks the model again: after a failure for the failed units, else
+      // for the whole turn in the language it shows.
+      const shown = mode === ORIGINAL ? undefined : targetOf(mode)
+      const refresh = (onPress: () => Promise<void>) => (
+        <Button key={`refresh-${id}`} label={REFRESH} dimColor onPress={onPress} />
+      )
+      toolbar = shown === undefined ? modes : [...modes, refresh(() => translateTurn($, settings, id, text, shown, true))]
       if (failed !== undefined && failedTarget !== undefined) {
-        const retry = (
-          <Button
-            key={`retry-${id}`}
-            label={s.retry}
-            dimColor
-            onPress={() => translateTurn($, settings, id, text, failedTarget)}
-          />
-        )
+        const retry = refresh(() => retryTurn($, settings, id, text, failedTarget))
+        toolbar = modes
         if (reply?.status === 'error') {
           const reason = s.reasons[failed.error ?? ''] ?? failed.error ?? ''
           panel = (

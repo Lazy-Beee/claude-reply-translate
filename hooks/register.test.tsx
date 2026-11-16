@@ -512,7 +512,7 @@ test('a reply that keeps coming back untranslated shows an error and keeps nothi
   expect(asked).toHaveLength(2)
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /the reply came back untranslated/ })).toBeDefined()
-  expect(await ui.find({ type: 'Button', text: /Retry/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /\u21BB/ })).toBeDefined()
   expect(await drawn(ui)).toEqual([FINAL_JA])
   expect(store.has(`t:${fingerprint(FINAL_JA)}`)).toBe(false)
   await ui.unmount()
@@ -535,6 +535,97 @@ test('a kept translation still in the reply\'s own language is dropped and the r
   await ui.press({ key: String(main?.key) })
   expect(asked).toHaveLength(1)
   expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', 'Japanese')])
+  await ui.unmount()
+})
+
+// A long English reply, long enough to be held to the length check.
+const LONG_EN = Array.from(
+  { length: 6 },
+  (_, i) => `Step ${i + 1} of the fix rewrites the parser so that it reads the new field before the old one.`,
+).join(' ')
+const LONG_ZH = '修复解析器'.repeat(30)
+const LONG_TURN: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: 'Explain the fix' }] },
+  { role: 'assistant', content: [{ type: 'text', text: LONG_EN }] },
+]
+// Seen in use: Haiku's answer to a long note, a remark and no translation.
+const REMARK = '<reply>的翻译如下。由于原文是英文，需逐句翻译。'
+
+test('a translation far shorter than the reply is asked for once more', CHINESE_READER, async ($, on) => {
+  let calls = 0
+  const { asked } = engine(on, {
+    messages: () => LONG_TURN,
+    answer: () => (calls++ === 0 ? REMARK : `<translation>\n${LONG_ZH}\n</translation>`),
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(LONG_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(2)
+  expect(asked[0]?.system).not.toContain('no full translation')
+  expect(asked[1]?.system).toContain('no full translation')
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(LONG_ZH)
+  await ui.unmount()
+})
+
+test('a translation that keeps coming back far too short shows an error, and \u21BB asks again', CHINESE_READER, async ($, on) => {
+  let isFixed = false
+  const { asked, store } = engine(on, {
+    messages: () => LONG_TURN,
+    answer: () => (isFixed ? `<translation>\n${LONG_ZH}\n</translation>` : REMARK),
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(LONG_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(2)
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /the translation came back incomplete/ })).toBeDefined()
+  expect(store.has(`t:${fingerprint(LONG_EN)}`)).toBe(false)
+
+  isFixed = true
+  const refresh = await ui.find({ type: 'Button', text: /\u21BB/ })
+  await ui.press({ key: String(refresh?.key) })
+  expect(asked).toHaveLength(3)
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(LONG_ZH)
+  expect(await marked(ui)).toBe('Simplified Chinese')
+  await ui.unmount()
+})
+
+test('a kept translation far shorter than the reply is dropped and the reply offered afresh', CHINESE_READER, async ($, on) => {
+  const { asked, store } = engine(on, { messages: () => LONG_TURN })
+  store.set(`t:${fingerprint(LONG_EN)}`, { texts: { 'zh-Hans': '的翻译如下。' }, language: 'zh-Hans', isHidden: false })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...reply(LONG_EN), surface: 'desktop' })
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await marked(ui)).toBe('Original')
+  expect(asked).toHaveLength(0)
+  await ui.unmount()
+})
+
+// ↻ over an open translation asks the model again, for one that came out
+// wrong; under the original there is nothing to make again.
+test('\u21BB under an open translation makes it again', CHINESE_READER, async ($, on) => {
+  const { asked } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', text: /\u21BB/ })).toBeUndefined()
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+  expect(asked).toHaveLength(1)
+
+  const refresh = await ui.find({ type: 'Button', text: /\u21BB/ })
+  await ui.press({ key: String(refresh?.key) })
+  expect(asked).toHaveLength(2)
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+  expect(await marked(ui)).toBe('Simplified Chinese')
+
+  const original = await ui.find({ type: 'Button', text: /^(\u2713 )?Original$/ })
+  await ui.press({ key: String(original?.key) })
+  expect(await ui.find({ type: 'Button', text: /\u21BB/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -784,7 +875,7 @@ test(
     expect(await final.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
     // The turn reads in Chinese: its note shows the translation.
     expect(await marked(final)).toBe('Simplified Chinese')
-    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English'])
+    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English', '\u21BB'])
     const showOriginal = await final.find({ type: 'Button', text: /^(✓ )?Original$/ })
     await final.press({ key: String(showOriginal?.key) })
     const original = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
@@ -817,8 +908,9 @@ test(
     expect(await drawn(inChinese)).toEqual([replaced('ZH-TEXT', 'English')])
     await inChinese.unmount()
     expect(await marked(final)).toBe('Simplified Chinese')
-    // The buttons stay put: Original and both languages, whatever it shows.
-    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English'])
+    // The buttons stay put: Original and both languages, whatever it shows,
+    // and ↻ while a translation is open.
+    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English', '\u21BB'])
     await final.unmount()
   },
 )

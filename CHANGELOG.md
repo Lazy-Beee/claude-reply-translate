@@ -2,6 +2,17 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.11.0 (2026-11-16)
+
+### Added
+
+- **↻** under a turn's buttons asks the model again: after a failure, for the parts that failed, and over an open translation, for the whole turn in the language it shows. It replaces **Retry**.
+
+### Fixed
+
+- A translation far shorter than its reply (under 15 % of a reply of 200 characters or more) is no longer taken: it is asked for once more, saying the first answer was no full translation, then shown as failed with "the translation came back incomplete". Seen in use: asked for a 2,000-character note, Haiku answered with a few lines on how it would translate it, which replaced the note. Such a translation kept by an earlier version is left out when read, so the reply is offered afresh.
+- The prompt asks the model to start its answer with the translation tag and to write no plan.
+
 ## 0.10.0 (2026-11-16)
 
 ### Changed

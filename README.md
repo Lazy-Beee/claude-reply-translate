@@ -9,6 +9,7 @@ A Claude Code mod that adds translate buttons under Claude's **final reply** of 
 ```
 
 - **Pick a language, get a translation.** Under each final reply sit **Original** and a button for each target language; the one checked (✓) is what the reply shows now. A language shows the reply in it, **Original** shows it as written. The translation opens in a bordered box under the reply. Code blocks, inline code, commands, file paths, URLs and identifiers are left as they are.
+- **Checked, and made again on request.** A translation that comes back in the reply's own language, or far shorter than the reply, is asked for once more, then shown as failed. **↻** asks the model again: after a failure, or over a translation that came out wrong.
 - **Only the languages it needs.** A language the reply is written in gets no button. The reply's language is worked out locally from its prose, so an English reply offers Chinese and a Chinese reply offers English.
 - **Always at hand, or out of the way.** The buttons always show by default. Turn `alwaysShowButtons` off and, on the desktop, they show only while the pointer is over the reply, floating in a fixed strip, so showing them does not shift the conversation.
 - **Each language is translated once per reply.** Translations are cached by language and kept between sessions.
