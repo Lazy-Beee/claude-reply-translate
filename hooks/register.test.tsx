@@ -488,6 +488,112 @@ test('a kept translation still in the reply\'s own language is dropped and the r
   await ui.unmount()
 })
 
+// The band above the prompt, as the main conversation's view draws it.
+const band = {
+  plugin: 'reply-translate',
+  component: 'AbovePrompt',
+  surface: 'desktop',
+  props: {
+    hasSurvey: false,
+    isCollapsed: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns: 80,
+    scroll: { offset: 0, bodyRows: 9 },
+    view: {},
+  },
+} as const
+
+test('the band above the prompt shows and hides the translations of the last replies at once', REPLACING, async ($, on) => {
+  const { asked } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Text', text: /Last 3 replies/ })).toBeDefined()
+  const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+  await row.press({ key: String(showAll?.key) })
+
+  // The English and the Japanese reply are translated into the main
+  // language; the Chinese one is in it already.
+  expect(asked).toHaveLength(2)
+  for (const text of [FINAL_EN, FINAL_JA]) {
+    const ui = await $.ui.mount({ ...reply(text), surface: 'desktop' })
+    expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+    await ui.unmount()
+  }
+  const chinese = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+  expect(await drawn(chinese)).toEqual([FINAL_ZH])
+  await chinese.unmount()
+
+  const showOriginals = await row.find({ type: 'Button', text: /Show originals/ })
+  await row.press({ key: String(showOriginals?.key) })
+  const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(await drawn(english)).toEqual([FINAL_EN])
+  expect(await english.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+  await english.unmount()
+
+  // Shown again from what was kept: no call.
+  await row.press({ key: String(showAll?.key) })
+  expect(asked).toHaveLength(2)
+  const again = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(await drawn(again)).toEqual(['ZH-TEXT'])
+  await again.unmount()
+  await row.unmount()
+})
+
+test(
+  'the band acts on no more replies than controlRange',
+  { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', replaceOriginal: true, controlRange: 1 } },
+  async ($, on) => {
+    const { asked } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+    const row = await $.ui.mount(band)
+    expect(await row.find({ type: 'Text', text: /Last reply/ })).toBeDefined()
+    const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+    await row.press({ key: String(showAll?.key) })
+
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.prompt).toContain(FINAL_JA)
+    const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    expect(await drawn(english)).toEqual([FINAL_EN])
+    await english.unmount()
+    await row.unmount()
+  },
+)
+
+// Without a main language every reply gets its main target, and the
+// translations open under the replies.
+test('without replaceOriginal the band opens and hides translations under the replies', CHINESE_READER, async ($, on) => {
+  const { asked } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const row = await $.ui.mount(band)
+  const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+  await row.press({ key: String(showAll?.key) })
+  expect(asked).toHaveLength(3)
+
+  const chinese = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+  expect((await chinese.find({ type: 'Markdown' }))?.text).toBe('EN-TEXT')
+  expect(await drawn(chinese)).toEqual([FINAL_ZH])
+  await chinese.unmount()
+
+  const hideAll = await row.find({ type: 'Button', text: /Hide translations/ })
+  await row.press({ key: String(hideAll?.key) })
+  const hidden = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+  expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
+  await hidden.unmount()
+  await row.unmount()
+})
+
+test('controlRange 0 draws no band', { options: { languages: 'zh-CN, en', controlRange: 0 } }, async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Button' })).toBeUndefined()
+  await row.unmount()
+})
+
 const SKIPPING = { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', skipPrimaryReplies: true } }
 
 test('with skipPrimaryReplies a reply in the main language is left as it is', SKIPPING, async ($, on) => {

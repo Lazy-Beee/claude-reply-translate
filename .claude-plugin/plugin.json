@@ -1,6 +1,6 @@
 {
   "name": "reply-translate",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Adds translate buttons under Claude's final reply of each turn",
   "author": { "name": "Lazy-Beee" },
   "license": "MIT",
@@ -47,6 +47,12 @@
       "title": "Always show the buttons",
       "description": "true: the buttons always show under each final reply; false: on the desktop they show only while the pointer is over the reply",
       "default": true
+    },
+    "controlRange": {
+      "type": "number",
+      "title": "Replies the band above the prompt acts on",
+      "description": "A row above the prompt shows or hides the translations of this many of the latest final replies at once; showing them translates those that have none yet, one model call each. 0: no row",
+      "default": 10
     },
     "model": {
       "type": "string",

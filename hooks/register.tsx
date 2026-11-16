@@ -69,7 +69,15 @@ type Settings = {
   skipPrimaryReplies: boolean
   uiLanguage: string
   showOnHover: boolean
+  // How many of the latest final replies the band above the prompt acts on;
+  // 0 draws no band.
+  controlRange: number
 }
+
+const DEFAULT_CONTROL_RANGE = 10
+
+// Translations the band starts at once; the rest wait their turn.
+const CONTROL_PARALLEL = 4
 
 // Replies shorter than this, normalized, are not translated ahead of time.
 const PREFETCH_MIN_CHARS = 12
@@ -87,6 +95,12 @@ type Strings = {
   hide: string
   show: string
   showOriginal: string
+  // The band above the prompt that acts on the last few replies at once.
+  recent: string
+  recentOne: string
+  showAll: string
+  showAllOriginals: string
+  hideAll: string
   copy: string
   copied: string
   retry: string
@@ -101,6 +115,11 @@ const EN: Strings = {
   hide: 'Hide translation',
   show: 'Show translation',
   showOriginal: 'Show original',
+  recent: 'Last {count} replies',
+  recentOne: 'Last reply',
+  showAll: 'Show translations',
+  showAllOriginals: 'Show originals',
+  hideAll: 'Hide translations',
   copy: 'Copy',
   copied: 'Translation copied',
   retry: 'Retry',
@@ -122,6 +141,11 @@ const STRINGS: Record<string, Strings> = {
     hide: '隐藏译文',
     show: '显示译文',
     showOriginal: '显示原文',
+    recent: '最近 {count} 条回复',
+    recentOne: '最近 1 条回复',
+    showAll: '全部显示译文',
+    showAllOriginals: '全部显示原文',
+    hideAll: '全部隐藏译文',
     copy: '复制',
     copied: '已复制译文',
     retry: '重试',
@@ -140,6 +164,11 @@ const STRINGS: Record<string, Strings> = {
     hide: '隱藏譯文',
     show: '顯示譯文',
     showOriginal: '顯示原文',
+    recent: '最近 {count} 則回覆',
+    recentOne: '最近 1 則回覆',
+    showAll: '全部顯示譯文',
+    showAllOriginals: '全部顯示原文',
+    hideAll: '全部隱藏譯文',
     copy: '複製',
     copied: '已複製譯文',
     retry: '重試',
@@ -158,6 +187,11 @@ const STRINGS: Record<string, Strings> = {
     hide: '訳文を隠す',
     show: '訳文を表示',
     showOriginal: '原文を表示',
+    recent: '直近 {count} 件の返信',
+    recentOne: '直近の返信',
+    showAll: '訳文をすべて表示',
+    showAllOriginals: '原文をすべて表示',
+    hideAll: '訳文をすべて隠す',
     copy: 'コピー',
     copied: '訳文をコピーしました',
     retry: '再試行',
@@ -176,6 +210,11 @@ const STRINGS: Record<string, Strings> = {
     hide: '번역 숨기기',
     show: '번역 보기',
     showOriginal: '원문 보기',
+    recent: '최근 답변 {count}개',
+    recentOne: '최근 답변',
+    showAll: '번역 모두 보기',
+    showAllOriginals: '원문 모두 보기',
+    hideAll: '번역 모두 숨기기',
     copy: '복사',
     copied: '번역문을 복사했습니다',
     retry: '다시 시도',
@@ -194,6 +233,11 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Ocultar traducción',
     show: 'Mostrar traducción',
     showOriginal: 'Mostrar original',
+    recent: 'Últimas {count} respuestas',
+    recentOne: 'Última respuesta',
+    showAll: 'Mostrar traducciones',
+    showAllOriginals: 'Mostrar originales',
+    hideAll: 'Ocultar traducciones',
     copy: 'Copiar',
     copied: 'Traducción copiada',
     retry: 'Reintentar',
@@ -212,6 +256,11 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Masquer la traduction',
     show: 'Afficher la traduction',
     showOriginal: "Afficher l'original",
+    recent: 'Les {count} dernières réponses',
+    recentOne: 'La dernière réponse',
+    showAll: 'Afficher les traductions',
+    showAllOriginals: 'Afficher les originaux',
+    hideAll: 'Masquer les traductions',
     copy: 'Copier',
     copied: 'Traduction copiée',
     retry: 'Réessayer',
@@ -230,6 +279,11 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Übersetzung ausblenden',
     show: 'Übersetzung anzeigen',
     showOriginal: 'Original anzeigen',
+    recent: 'Letzte {count} Antworten',
+    recentOne: 'Letzte Antwort',
+    showAll: 'Übersetzungen zeigen',
+    showAllOriginals: 'Originale zeigen',
+    hideAll: 'Übersetzungen ausblenden',
     copy: 'Kopieren',
     copied: 'Übersetzung kopiert',
     retry: 'Erneut versuchen',
@@ -535,6 +589,16 @@ type FinalReply = { id: string; text: string }
 // The blocks of a reply are joined with this to make the text translated.
 const BLOCK_JOIN = '\n\n'
 
+// A final reply from its blocks: one block keeps that block's fingerprint as
+// its id; several get the fingerprint of their joined text.
+function replyOf(blocks: string[]): FinalReply {
+  const text = blocks.join(BLOCK_JOIN)
+  const first = blocks[0]
+  const id = blocks.length === 1 && first !== undefined ? fingerprint(first) : fingerprint(text)
+
+  return { id, text }
+}
+
 // Records the final replies not yet known and answers them. A reply of one
 // block keeps that block's fingerprint as its id; a reply of several gets the
 // fingerprint of its joined text, and each of its blocks a `groups` entry, so
@@ -550,8 +614,7 @@ async function refresh($: EngineInterface, answer?: string): Promise<FinalReply[
     if (blockIds.every(blockId => known.has(blockId) || freshBlocks.includes(blockId))) {
       continue
     }
-    const text = blocks.join(BLOCK_JOIN)
-    const id = blocks.length === 1 ? (blockIds[0] ?? fingerprint(text)) : fingerprint(text)
+    const { id, text } = replyOf(blocks)
     blockIds.forEach((blockId, i) => {
       if (!known.has(blockId) && !freshBlocks.includes(blockId)) {
         freshBlocks.push(blockId)
@@ -871,6 +934,75 @@ async function setHidden($: EngineInterface, id: string, isHidden: boolean) {
   await keep($, id)
 }
 
+// ---- The band above the prompt: the last few final replies at once.
+
+// A whole number of replies, 0 or more; the default for anything else.
+function controlRangeOf(value: unknown): number {
+  const count = Number(String(value ?? DEFAULT_CONTROL_RANGE).trim())
+
+  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : DEFAULT_CONTROL_RANGE
+}
+
+// The last `count` final replies in the transcript, oldest first. Only these
+// are touched, so a long conversation costs no more than a short one.
+async function recentReplies($: EngineInterface, count: number): Promise<FinalReply[]> {
+  if (count <= 0) {
+    return []
+  }
+
+  return (await finalReplies($)).slice(-count).map(replyOf)
+}
+
+// Runs the tasks with at most `limit` of them at a time.
+async function runLimited(tasks: (() => Promise<unknown>)[], limit: number) {
+  let next = 0
+  const worker = async () => {
+    while (next < tasks.length) {
+      const task = tasks[next]
+      next += 1
+      await task?.().catch(() => undefined)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
+}
+
+// Opens a translation on each of the last few replies, as its own buttons
+// would: one shown before shows again, in the language it was in; else the
+// reply is translated into its main target, a kept translation costing no
+// call. With a main language, replies already in it are left as they are.
+async function showAllTranslations($: EngineInterface, settings: Settings, ui: string) {
+  const targets = targetsFor(settings, ui)
+  const tasks: (() => Promise<unknown>)[] = []
+  for (const { id, text } of await recentReplies($, settings.controlRange)) {
+    if (settings.primary !== undefined && replyLanguage(text) === settings.primary.family) {
+      continue
+    }
+    const reply = await currentReply($, id, text)
+    if (reply?.status === 'running' || isShowing(reply)) {
+      continue
+    }
+    if (reply?.status === 'done' && reply.language !== undefined && reply.texts[reply.language] !== undefined) {
+      tasks.push(() => setHidden($, id, false))
+      continue
+    }
+    const target = offeredTargets(targets, text)[0]
+    if (target !== undefined) {
+      tasks.push(() => translate($, settings.model, id, text, target))
+    }
+  }
+  await runLimited(tasks, CONTROL_PARALLEL)
+}
+
+// Closes the open translation of each of the last few replies: the original
+// shows again, and each translation stays a press away.
+async function hideAllTranslations($: EngineInterface, settings: Settings) {
+  for (const { id, text } of await recentReplies($, settings.controlRange)) {
+    if (isShowing(await currentReply($, id, text))) {
+      await setHidden($, id, true)
+    }
+  }
+}
+
 async function copyText($: EngineInterface, text: string, surface: Surface, message: string) {
   const result = await $.ui.copy({ text, surface })
   if (result.isCopied) {
@@ -893,6 +1025,7 @@ export const register: Register = (on, options) => {
     uiLanguage: String(options.uiLanguage ?? 'auto'),
     // Buttons always show unless alwaysShowButtons is turned off.
     showOnHover: options.alwaysShowButtons === false || String(options.alwaysShowButtons).toLowerCase() === 'false',
+    controlRange: controlRangeOf(options.controlRange),
   }
 
   on('session.start', async ($, e, next) => {
@@ -1106,6 +1239,39 @@ export const register: Register = (on, options) => {
         {drawn}
         {isReplaced || panel === undefined ? undefined : <Box marginTop="sm">{panel}</Box>}
         {bar}
+      </Box>
+    )
+  })
+
+  // The band above the prompt: one row that opens or closes the translations
+  // of the last few final replies at once. Only the main conversation's view
+  // gets it, and a survey holding the band comes first.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (settings.controlRange <= 0 || e.props.hasSurvey || e.props.view.agentId !== undefined) {
+      return next(e)
+    }
+    // Replies with buttons: a block of its own, or the last block of a reply.
+    const known = await read($, finals)
+    const grouped = await read($, groups)
+    const count = known.filter(blockId => grouped[blockId]?.isLast !== false).length
+    if (count === 0) {
+      return next(e)
+    }
+    const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
+    const s = STRINGS[ui] ?? EN
+    const shown = Math.min(count, settings.controlRange)
+    const { Box, Button, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="row" gap="sm">
+        <Text dimColor>{shown === 1 ? s.recentOne : s.recent.replace('{count}', String(shown))}</Text>
+        <Button key="rt-show-all" label={s.showAll} onPress={() => showAllTranslations($, settings, ui)} />
+        <Button
+          key="rt-hide-all"
+          label={settings.replaceOriginal ? s.showAllOriginals : s.hideAll}
+          dimColor
+          onPress={() => hideAllTranslations($, settings)}
+        />
       </Box>
     )
   })
