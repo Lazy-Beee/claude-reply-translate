@@ -10,9 +10,10 @@ A Claude Code mod that adds translate buttons under Claude's **final reply** of 
 
 - **Pick a language, get a translation.** The translation opens in a bordered box under the reply. Code blocks, inline code, commands, file paths, URLs and identifiers are left as they are.
 - **The main button picks the target for you.** It is the first of your target languages that is not the reply's own language. The reply's language is worked out locally from its prose, so an English reply offers Chinese and a Chinese reply offers English.
-- **Out of the way until you need it.** On the desktop the buttons show while the pointer is over the reply. They float in a fixed strip, so showing them does not shift the conversation.
+- **Always at hand, or out of the way.** The buttons always show by default. Turn `alwaysShowButtons` off and, on the desktop, they show only while the pointer is over the reply, floating in a fixed strip, so showing them does not shift the conversation.
 - **Each language is translated once per reply.** Translations are cached by language and kept between sessions.
 - **Ready before you ask (optional).** Set a main language and replies in other languages are translated into it in the background as each turn ends. With `autoExpand` on, the translation opens by itself.
+- **Read in your language (optional).** With `replaceOriginal` on, a translation takes the place of the reply instead of opening under it, so each reply shows in one language at a time. A **Show original** button brings the reply back. With a main language set too, replies in other languages are translated into it as each turn ends and shown in its place, with no press.
 - **Buttons in your language.** The button text follows Claude Code's `language` setting, then the system language. It is available in English, Simplified and Traditional Chinese, Japanese, Korean, Spanish, French and German.
 
 ## Requirements
@@ -57,8 +58,10 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the pl
       "languages": "zh-CN, en",
       "primaryLanguage": "zh-CN",
       "autoExpand": false,
+      "replaceOriginal": false,
+      "skipPrimaryReplies": false,
       "uiLanguage": "auto",
-      "showButtons": "hover",
+      "alwaysShowButtons": true,
       "model": "haiku"
     }
   }
@@ -70,8 +73,10 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the pl
 | `languages` | `auto` | The languages to translate into, comma-separated: tags such as `zh-CN`, `zh-TW`, `en`, `ja`, or names such as `Japanese`. Each gets a button, and their order decides the main one. `auto` means the button language, then English. |
 | `primaryLanguage` | empty (off) | Your own language. As each turn ends, a final reply in another language is translated into it in the background, so pressing the button shows it at once. It also comes first among the targets. |
 | `autoExpand` | `false` | Needs a main language. When on, those background translations open by themselves, with a progress bar while they run. |
+| `replaceOriginal` | `false` | When on, a translation in any language is shown in place of the reply rather than under it, so the reply shows in one language at a time. **Show original** brings the reply back. With a main language set, the translation into it is also made as each turn ends and shown with no press; this wins over `autoExpand`. |
 | `uiLanguage` | `auto` | The language of the buttons. `auto` follows Claude Code's `language` setting, then the system language. You can also give a tag such as `zh-CN`. |
-| `showButtons` | `hover` | `hover`: on the desktop, the buttons show only while the pointer is over the reply. `always`: they always show. |
+| `skipPrimaryReplies` | `false` | Needs a main language. When on, a reply already in your main language is left as it is: no buttons, and no room kept for them. A reply that has a translation open already still shows it. |
+| `alwaysShowButtons` | `true` | `true`: the buttons always show. `false`: on the desktop, they show only while the pointer is over the reply. |
 | `model` | `haiku` | The model used to translate: an alias or a full model id. |
 
 You can also set them from a shell. Every value is given as a string:
@@ -88,16 +93,15 @@ Translations run through your session's own model client and credentials. On a C
 
 ## How it works
 
-- The mod reads the session's transcript to find the final replies: the text of a model response that calls no tool. It remembers their fingerprints, and only those blocks get buttons.
+- The mod reads the session's transcript to find the final replies: the text of a model response that calls no tool. It remembers their fingerprints, and only those replies get buttons. A reply written as several text blocks gets one set of buttons, under its last block, and is translated as a whole.
 - It draws the buttons by wrapping the engine's own drawing of each final reply (`ui.render` on `AssistantMessage`). The stored message is never changed.
-- A translation is one `$.model.complete` call with no history and no tools. The reply is wrapped in `<reply>` tags, so the model reads it as data.
+- A translation is one `$.model.complete` call with no history and no tools. The reply is wrapped in `<reply>` tags, so the model reads it as data. The model writes the translation inside `<translation>` tags, and anything it writes outside them, such as a remark about the text, is dropped. An answer still in the reply's own language is asked for once more, then shown as a failure rather than as a translation.
 - Translations live in the session's state and in the mod's own store, which is kept between sessions. The store holds about 2 MB, and the oldest translations are dropped first.
 
 ## Known limitations
 
-- A final reply made of several text blocks gets one set of buttons per block.
 - The reply's language is recognised for Chinese, Japanese, Korean and English. For any other language, every target is offered.
-- In hover mode each final reply keeps a strip about two lines high for the buttons, even when they are hidden.
+- With `alwaysShowButtons` off, each final reply keeps a strip about two lines high for the buttons, even when they are hidden.
 - Sessions viewed through Remote Control show no buttons.
 
 ## Develop

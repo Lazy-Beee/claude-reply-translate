@@ -1,6 +1,6 @@
 {
   "name": "reply-translate",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Adds translate buttons under Claude's final reply of each turn",
   "author": { "name": "Lazy-Beee" },
   "license": "MIT",
@@ -30,12 +30,23 @@
       "description": "Language of the buttons: auto follows Claude Code's language setting, then the system language; or a tag such as zh-CN, en, ja",
       "default": "auto"
     },
-    "showButtons": {
-      "type": "string",
-      "title": "When to show the buttons",
-      "description": "hover: on the desktop, only while the pointer is over the reply; always: all the time",
-      "options": ["hover", "always"],
-      "default": "hover"
+    "replaceOriginal": {
+      "type": "boolean",
+      "title": "Show translations in place of the reply",
+      "description": "true: an open translation, in any language, takes the place of the reply, so the reply shows in one language at a time, with a button to show the original again. With a main language set, a final reply in another language is also translated into it as its turn ends, with no press; false: translations show under the reply",
+      "default": false
+    },
+    "skipPrimaryReplies": {
+      "type": "boolean",
+      "title": "No buttons on replies in the main language",
+      "description": "Needs a main language. true: a final reply already in the main language is left as it is, with no buttons and no room kept for them, unless it has a translation open already",
+      "default": false
+    },
+    "alwaysShowButtons": {
+      "type": "boolean",
+      "title": "Always show the buttons",
+      "description": "true: the buttons always show under each final reply; false: on the desktop they show only while the pointer is over the reply",
+      "default": true
     },
     "model": {
       "type": "string",

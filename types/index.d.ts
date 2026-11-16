@@ -16,10 +16,21 @@ export type Reply = {
   prefetching?: string
 }
 
+// A block of a final reply made of several text blocks, keyed by the block's
+// fingerprint. Only the last one draws the buttons, and it holds the reply's
+// joined text, which is what gets translated.
+export type Group = {
+  // The reply's id: the fingerprint of its joined text.
+  reply: string
+  isLast: boolean
+  text?: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'reply-translate': {
       finals: Shaped<string[]>
+      groups: Shaped<Record<string, Group>>
       // The language the buttons are drawn in: a key of the strings table.
       uiLocale: string
       replies: StateFamily<Reply>

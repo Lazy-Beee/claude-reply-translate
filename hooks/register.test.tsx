@@ -46,7 +46,10 @@ type On = Parameters<TestBody>[1]
 
 // Stands in for the engine: the transcript, the clock, the settings, the
 // store and the model. The model answers with the language it was asked for.
-function engine(on: On, options: { messages?: () => Message[]; language?: string } = {}) {
+function engine(
+  on: On,
+  options: { messages?: () => Message[]; language?: string; answer?: (translation: string) => string } = {},
+) {
   const asked: { prompt: string; system: string }[] = []
   const store = new Map<string, unknown>()
   on('session.messages', () => ({ value: (options.messages ?? (() => MESSAGES))() }))
@@ -70,16 +73,31 @@ function engine(on: On, options: { messages?: () => Message[]; language?: string
     asked.push({ prompt: String(e.prompt), system })
     const text = system.includes('into English') ? 'EN-TEXT' : 'ZH-TEXT'
 
-    // Echoes the wrapper, as the model sometimes does: the mod strips it.
-    return { value: { isAnswered: true, text: `<reply>\n${text}\n</reply>`, usage: USAGE } }
+    // By default it echoes the <reply> wrapper and writes no <translation>
+    // tags, as the model sometimes does: the mod strips the wrapper.
+    const answer = options.answer ?? (translation => `<reply>\n${translation}\n</reply>`)
+
+    return { value: { isAnswered: true, text: answer(text), usage: USAGE } }
   })
+  // The engine draws a reply as `engine: <its text>`, so a test can tell
+  // the reply from a translation drawn in its place.
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
+    const text = 'text' in e.props ? String(e.props.text) : ''
 
-    return <Text>engine</Text>
+    return <Text>{`${DRAWN}${text}`}</Text>
   })
 
   return { asked, store }
+}
+
+const DRAWN = 'engine: '
+
+type Mounted = Pick<Awaited<ReturnType<Parameters<TestBody>[0]['ui']['mount']>>, 'findAll'>
+
+// The texts the engine draws: the reply's own, or a translation in its place.
+async function drawn(ui: Mounted): Promise<string[]> {
+  return (await ui.findAll({ type: 'Text', text: /^engine: / })).map(found => String(found.text).slice(DRAWN.length))
 }
 
 // Targets as a Chinese reader would set them; the defaults are `auto` and no
@@ -113,6 +131,8 @@ test('an English reply offers Simplified Chinese, translates, hides and shows ag
   expect(asked[0]?.system).toContain('into Simplified Chinese')
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
   expect(await ui.find({ type: 'Text', text: /Translation · Simplified Chinese/ })).toBeDefined()
+  // By default the translation shows under the reply, which stays.
+  expect(await ui.find({ type: 'Text', text: /engine/ })).toBeDefined()
 
   // Kept for later sessions.
   const kept = store.get(`t:${fingerprint(FINAL_EN)}`) as { texts: Record<string, string> } | undefined
@@ -244,23 +264,340 @@ test(
   { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', autoExpand: true } },
   async ($, on) => {
     let messages = MESSAGES.slice(0, 3)
-    const { asked } = engine(on, { messages: () => messages })
+    const { asked, store } = engine(on, { messages: () => messages })
     await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
     messages = MESSAGES.slice(0, 4)
     await $.turn.complete({ answer: FINAL_EN, durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
-    let shown = await ui.find({ type: 'Markdown' })
-    for (let i = 0; i < 50 && shown === undefined; i++) {
-      shown = await ui.find({ type: 'Markdown' })
+    // The translation runs on a timer. Wait until it is kept, on another
+    // drawing: in the kit, a write that lands while a drawing is being made
+    // can miss its redraw, which this test is not about.
+    const key = `t:${fingerprint(FINAL_EN)}`
+    const waiting = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    for (let i = 0; i < 200 && !store.has(key); i++) {
+      await waiting.find({ type: 'Text' })
     }
+    await waiting.unmount()
 
-    expect(shown?.text).toBe('ZH-TEXT')
+    // Opened by itself: no press, and the translation shows.
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
     expect(asked).toHaveLength(1)
     expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeDefined()
     await ui.unmount()
   },
 )
+
+// Seen in use: the model wrote a remark about the text before translating it.
+test('a remark the model writes around the <translation> tags is dropped', CHINESE_READER, async ($, on) => {
+  const { asked } = engine(on, {
+    answer: translation =>
+      `The content in <reply> needs to be translated into Simplified Chinese.\n<translation>\n${translation}\n</translation>\nI kept the code unchanged.`,
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked[0]?.system).toContain('<translation>')
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+  await ui.unmount()
+})
+
+test('a translation cut off before its closing tag keeps what it has', CHINESE_READER, async ($, on) => {
+  engine(on, { answer: translation => `<translation>\n${translation}` })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+  await ui.unmount()
+})
+
+// The toolbar shows in the flow by default; with alwaysShowButtons off, on
+// the desktop it sits in the hover strip, hidden until the pointer is over.
+test('the buttons always show by default', CHINESE_READER, async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const boxes = await ui.findAll({ type: 'Box' })
+  expect(boxes.some(box => box.props.display === 'none')).toBe(false)
+  expect(await ui.find({ type: 'Button', text: /Simplified Chinese/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test(
+  'with alwaysShowButtons off the buttons wait for the pointer on the desktop',
+  { options: { languages: 'zh-CN, en', alwaysShowButtons: false } },
+  async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    // The kit leaves `hover` out of the props it reports, so this checks the
+    // hidden bar floating in its strip.
+    const boxes = await ui.findAll({ type: 'Box' })
+    const hidden = boxes.find(box => box.props.display === 'none')
+    expect(hidden?.props.position).toBe('absolute')
+    expect(boxes.some(box => box.props.height === 2)).toBe(true)
+    expect(await ui.find({ type: 'Button', text: /Simplified Chinese/ })).toBeDefined()
+    await ui.unmount()
+  },
+)
+
+const REPLACING = { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', replaceOriginal: true } }
+
+test('with replaceOriginal the main-language translation is made and takes the place of the reply, no press', REPLACING, async ($, on) => {
+  let messages = MESSAGES.slice(0, 3)
+  const { asked, store } = engine(on, { messages: () => messages })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  messages = MESSAGES.slice(0, 4)
+  await $.turn.complete({ answer: FINAL_EN, durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const key = `t:${fingerprint(FINAL_EN)}`
+  const waiting = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+  for (let i = 0; i < 200 && !store.has(key); i++) {
+    await waiting.find({ type: 'Text' })
+  }
+  await waiting.unmount()
+
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(asked).toHaveLength(1)
+  // The engine draws the translation in the reply's place, in its own style.
+  expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// The reply shows in one language at a time: a translation into another
+// language takes its place too, and switching back to the main language
+// swaps the one in place.
+test('with replaceOriginal a translation into another language takes the place of the reply too', REPLACING, async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  const english = await ui.find({ type: 'Button', text: /English/ })
+  await ui.press({ key: String(english?.key) })
+
+  expect(await drawn(ui)).toEqual(['EN-TEXT'])
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeUndefined()
+
+  const chinese = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(chinese?.key) })
+  expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  await ui.unmount()
+})
+
+// Without a main language nothing is translated as a turn ends, but a
+// translation that is asked for still takes the reply's place.
+test(
+  'replaceOriginal needs no main language for a translation that is asked for',
+  { options: { languages: 'zh-CN, en', replaceOriginal: true } },
+  async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+    await ui.press({ key: String(main?.key) })
+
+    expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+    expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
+    await ui.unmount()
+  },
+)
+
+test('with replaceOriginal an open main-language translation takes the place of the reply', REPLACING, async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+  expect(await ui.find({ type: 'Text', text: /Translation · Simplified Chinese/ })).toBeDefined()
+
+  // Showing the original puts the reply back and keeps the translation a
+  // press away.
+  const showOriginal = await ui.find({ type: 'Button', text: /Show original/ })
+  await ui.press({ key: String(showOriginal?.key) })
+  expect(await drawn(ui)).toEqual([FINAL_EN])
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// Seen in use: asked for Simplified Chinese, the model handed a Japanese
+// reply back unchanged, and it showed in the reply's place as if translated.
+test('a translation still in the reply\'s own language is asked for once more', REPLACING, async ($, on) => {
+  let calls = 0
+  const { asked } = engine(on, {
+    answer: translation => `<translation>\n${calls++ === 0 ? FINAL_JA : translation}\n</translation>`,
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(2)
+  expect(asked[0]?.system).toContain('written in Japanese')
+  expect(asked[0]?.system).not.toContain('untranslated')
+  expect(asked[1]?.system).toContain('untranslated')
+  expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+  await ui.unmount()
+})
+
+test('a reply that keeps coming back untranslated shows an error and keeps nothing', REPLACING, async ($, on) => {
+  const { asked, store } = engine(on, { answer: () => `<translation>\n${FINAL_JA}\n</translation>` })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(2)
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /the reply came back untranslated/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Retry/ })).toBeDefined()
+  expect(await drawn(ui)).toEqual([FINAL_JA])
+  expect(store.has(`t:${fingerprint(FINAL_JA)}`)).toBe(false)
+  await ui.unmount()
+})
+
+test('a kept translation still in the reply\'s own language is dropped and the reply offered afresh', REPLACING, async ($, on) => {
+  const { asked, store } = engine(on)
+  store.set(`t:${fingerprint(FINAL_JA)}`, { texts: { 'zh-Hans': FINAL_JA }, language: 'zh-Hans', isHidden: false })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  // The kept text is the reply itself, so only the missing heading and Show
+  // original button tell that it is not drawn in the reply's place.
+  expect(await ui.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeUndefined()
+  expect(await drawn(ui)).toEqual([FINAL_JA])
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  expect(main?.props.label).toBe('Translate · Simplified Chinese')
+
+  await ui.press({ key: String(main?.key) })
+  expect(asked).toHaveLength(1)
+  expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+  await ui.unmount()
+})
+
+const SKIPPING = { options: { languages: 'zh-CN, en', primaryLanguage: 'zh-CN', skipPrimaryReplies: true } }
+
+test('with skipPrimaryReplies a reply in the main language is left as it is', SKIPPING, async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  // No buttons and no room for them: only the engine's own drawing.
+  const chinese = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+  expect(await chinese.find({ type: 'Button' })).toBeUndefined()
+  expect(await chinese.findAll({ type: 'Box' })).toHaveLength(0)
+  expect(await chinese.find({ type: 'Text', text: /engine/ })).toBeDefined()
+  await chinese.unmount()
+
+  // A reply in another language still gets its buttons.
+  const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(await english.find({ type: 'Button', text: /Simplified Chinese/ })).toBeDefined()
+  await english.unmount()
+})
+
+test('with skipPrimaryReplies a main-language reply keeps a translation it already has', SKIPPING, async ($, on) => {
+  const { store } = engine(on)
+  store.set(`t:${fingerprint(FINAL_ZH)}`, { texts: { en: 'KEPT' }, language: 'en', isHidden: false })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe('KEPT')
+  expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const PART_ONE = 'First I changed the parser so that it reads the new field.'
+const PART_TWO = 'Then I updated the tests, and they all pass now.'
+
+// One final reply written as two text blocks.
+const SPLIT: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: 'Do it' }] },
+  {
+    role: 'assistant',
+    content: [
+      { type: 'text', text: PART_ONE },
+      { type: 'text', text: PART_TWO },
+    ],
+  },
+]
+
+test('a reply of several blocks gets one set of buttons, under its last block, for the whole reply', CHINESE_READER, async ($, on) => {
+  const { asked, store } = engine(on, { messages: () => SPLIT })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const first = await $.ui.mount({ ...reply(PART_ONE), surface: 'desktop' })
+  expect(await first.find({ type: 'Button' })).toBeUndefined()
+  expect(await drawn(first)).toEqual([PART_ONE])
+  await first.unmount()
+
+  const last = await $.ui.mount({ ...reply(PART_TWO), surface: 'desktop' })
+  const main = await last.find({ type: 'Button', text: /Simplified Chinese/ })
+  expect(main?.props.label).toBe('Translate · Simplified Chinese')
+  await last.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.prompt).toContain(PART_ONE)
+  expect(asked[0]?.prompt).toContain(PART_TWO)
+  expect((await last.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+  const kept = store.get(`t:${fingerprint(`${PART_ONE}\n\n${PART_TWO}`)}`) as
+    | { texts: Record<string, string> }
+    | undefined
+  expect(kept?.texts['zh-Hans']).toBe('ZH-TEXT')
+  await last.unmount()
+})
+
+test('with replaceOriginal the earlier blocks of a reply give way to its translation', REPLACING, async ($, on) => {
+  engine(on, { messages: () => SPLIT })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const last = await $.ui.mount({ ...reply(PART_TWO), surface: 'desktop' })
+  const main = await last.find({ type: 'Button', text: /Simplified Chinese/ })
+  await last.press({ key: String(main?.key) })
+  expect(await drawn(last)).toEqual(['ZH-TEXT'])
+  await last.unmount()
+
+  const first = await $.ui.mount({ ...reply(PART_ONE), surface: 'desktop' })
+  expect(await drawn(first)).toEqual([])
+  await first.unmount()
+})
+
+test('a reply of several blocks is translated ahead of time in one call', CHINESE_MAIN, async ($, on) => {
+  let messages = SPLIT.slice(0, 1)
+  const { asked } = engine(on, { messages: () => messages })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  messages = SPLIT
+  await $.turn.complete({
+    answer: `${PART_ONE}\n\n${PART_TWO}`,
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+  })
+  const last = await $.ui.mount({ ...reply(PART_TWO), surface: 'desktop' })
+  for (let i = 0; i < 50 && asked.length === 0; i++) {
+    await last.find({ type: 'Button' })
+  }
+  for (let i = 0; i < 20; i++) {
+    await last.find({ type: 'Button' })
+  }
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.prompt).toContain(PART_ONE)
+  expect(asked[0]?.prompt).toContain(PART_TWO)
+  await last.unmount()
+})
 
 test('a reply gets its buttons when the history arrives after session.start', CHINESE_READER, async ($, on) => {
   // A reopened session: the first read, at session.start, finds no history yet.
