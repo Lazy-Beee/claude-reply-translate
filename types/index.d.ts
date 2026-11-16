@@ -37,6 +37,9 @@ export type Turns = {
   noteOf: Record<string, string>
   // A final reply's id: the notes of its turn, in order.
   notesOf: Record<string, Note[]>
+  // A final reply's id: the language it is written in, when recognised, so
+  // the band can tell which language every recent turn reads in.
+  languageOf: Record<string, string>
 }
 
 declare module 'claude-code' {

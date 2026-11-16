@@ -41,9 +41,11 @@ const groups = atom({ plugin: 'reply-translate', key: 'groups' } as const, {}, {
 })
 
 // Under translateAll, how each turn's notes hang on its final reply.
-const turns = atom({ plugin: 'reply-translate', key: 'turns' } as const, { noteOf: {}, notesOf: {} }, {
-  shape: 'turns-1',
-})
+const turns = atom(
+  { plugin: 'reply-translate', key: 'turns' } as const,
+  { noteOf: {}, notesOf: {}, languageOf: {} },
+  { shape: 'turns-2' },
+)
 
 const uiLocale = { plugin: 'reply-translate', key: 'uiLocale' } as const
 
@@ -90,22 +92,24 @@ const DEFAULT_CONTROL_RANGE = 10
 // Translations the band starts at once; the rest wait their turn.
 const CONTROL_PARALLEL = 4
 
+// The label of the button marked as a turn's mode: a check before its name.
+// The desktop draws its own native buttons: of a Button's look it takes the
+// primary variant (which stood out too much) and the dim label, and drew
+// neither a bold label nor a tint behind it, so the mark is in the text.
+const markedLabel = (name: string) => `✓ ${name}`
+
 // Replies shorter than this, normalized, are not translated ahead of time.
 const PREFETCH_MIN_CHARS = 12
 
 type StoredReply = { texts: Record<string, string>; language?: string; isHidden: boolean }
 
-type Surface = Parameters<EngineInterface['ui']['copy']>[0]['surface']
-
 // ---- Strings of the buttons, in the languages the buttons can be drawn in.
 
 type Strings = {
-  translate: string
   translating: string
   translation: string
-  hide: string
-  show: string
-  showOriginal: string
+  // The button that shows a turn as it was written.
+  original: string
   // The note that ends a translation drawn in the reply's place, on its last
   // line: what it was translated from, or only that it is one.
   translatedFrom: string
@@ -113,32 +117,19 @@ type Strings = {
   // The band above the prompt that acts on the last few replies at once.
   recent: string
   recentOne: string
-  showAll: string
-  showAllOriginals: string
-  hideAll: string
-  copy: string
-  copied: string
   retry: string
   failed: string
   reasons: Record<string, string>
 }
 
 const EN: Strings = {
-  translate: 'Translate',
   translating: 'Translating',
   translation: 'Translation',
-  hide: 'Hide translation',
-  show: 'Show translation',
-  showOriginal: 'Show original',
+  original: 'Original',
   translatedFrom: '(translated from {language})',
   translatedMark: '(translated)',
   recent: 'Last {count} replies',
   recentOne: 'Last reply',
-  showAll: 'Show translations',
-  showAllOriginals: 'Show originals',
-  hideAll: 'Hide translations',
-  copy: 'Copy',
-  copied: 'Translation copied',
   retry: 'Retry',
   failed: 'Translation failed: {reason}',
   reasons: {
@@ -152,21 +143,13 @@ const EN: Strings = {
 const STRINGS: Record<string, Strings> = {
   en: EN,
   'zh-Hans': {
-    translate: '翻译',
     translating: '正在翻译',
     translation: '译文',
-    hide: '隐藏译文',
-    show: '显示译文',
-    showOriginal: '显示原文',
+    original: '原文',
     translatedFrom: '（翻译自{language}）',
     translatedMark: '（译文）',
     recent: '最近 {count} 条回复',
     recentOne: '最近 1 条回复',
-    showAll: '全部显示译文',
-    showAllOriginals: '全部显示原文',
-    hideAll: '全部隐藏译文',
-    copy: '复制',
-    copied: '已复制译文',
     retry: '重试',
     failed: '翻译失败：{reason}',
     reasons: {
@@ -177,21 +160,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   'zh-Hant': {
-    translate: '翻譯',
     translating: '正在翻譯',
     translation: '譯文',
-    hide: '隱藏譯文',
-    show: '顯示譯文',
-    showOriginal: '顯示原文',
+    original: '原文',
     translatedFrom: '（翻譯自{language}）',
     translatedMark: '（譯文）',
     recent: '最近 {count} 則回覆',
     recentOne: '最近 1 則回覆',
-    showAll: '全部顯示譯文',
-    showAllOriginals: '全部顯示原文',
-    hideAll: '全部隱藏譯文',
-    copy: '複製',
-    copied: '已複製譯文',
     retry: '重試',
     failed: '翻譯失敗：{reason}',
     reasons: {
@@ -202,21 +177,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   ja: {
-    translate: '翻訳',
     translating: '翻訳中',
     translation: '訳文',
-    hide: '訳文を隠す',
-    show: '訳文を表示',
-    showOriginal: '原文を表示',
+    original: '原文',
     translatedFrom: '（{language}から翻訳）',
     translatedMark: '（翻訳）',
     recent: '直近 {count} 件の返信',
     recentOne: '直近の返信',
-    showAll: '訳文をすべて表示',
-    showAllOriginals: '原文をすべて表示',
-    hideAll: '訳文をすべて隠す',
-    copy: 'コピー',
-    copied: '訳文をコピーしました',
     retry: '再試行',
     failed: '翻訳に失敗しました：{reason}',
     reasons: {
@@ -227,21 +194,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   ko: {
-    translate: '번역',
     translating: '번역 중',
     translation: '번역문',
-    hide: '번역 숨기기',
-    show: '번역 보기',
-    showOriginal: '원문 보기',
+    original: '원문',
     translatedFrom: '({language}에서 번역)',
     translatedMark: '(번역문)',
     recent: '최근 답변 {count}개',
     recentOne: '최근 답변',
-    showAll: '번역 모두 보기',
-    showAllOriginals: '원문 모두 보기',
-    hideAll: '번역 모두 숨기기',
-    copy: '복사',
-    copied: '번역문을 복사했습니다',
     retry: '다시 시도',
     failed: '번역 실패: {reason}',
     reasons: {
@@ -252,21 +211,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   es: {
-    translate: 'Traducir',
     translating: 'Traduciendo',
     translation: 'Traducción',
-    hide: 'Ocultar traducción',
-    show: 'Mostrar traducción',
-    showOriginal: 'Mostrar original',
+    original: 'Original',
     translatedFrom: '(traducido del {language})',
     translatedMark: '(traducido)',
     recent: 'Últimas {count} respuestas',
     recentOne: 'Última respuesta',
-    showAll: 'Mostrar traducciones',
-    showAllOriginals: 'Mostrar originales',
-    hideAll: 'Ocultar traducciones',
-    copy: 'Copiar',
-    copied: 'Traducción copiada',
     retry: 'Reintentar',
     failed: 'Error al traducir: {reason}',
     reasons: {
@@ -277,21 +228,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   fr: {
-    translate: 'Traduire',
     translating: 'Traduction en cours',
     translation: 'Traduction',
-    hide: 'Masquer la traduction',
-    show: 'Afficher la traduction',
-    showOriginal: "Afficher l'original",
+    original: 'Original',
     translatedFrom: "(traduit de l'original en {language})",
     translatedMark: '(traduit)',
     recent: 'Les {count} dernières réponses',
     recentOne: 'La dernière réponse',
-    showAll: 'Afficher les traductions',
-    showAllOriginals: 'Afficher les originaux',
-    hideAll: 'Masquer les traductions',
-    copy: 'Copier',
-    copied: 'Traduction copiée',
     retry: 'Réessayer',
     failed: 'Échec de la traduction : {reason}',
     reasons: {
@@ -302,21 +245,13 @@ const STRINGS: Record<string, Strings> = {
     },
   },
   de: {
-    translate: 'Übersetzen',
     translating: 'Wird übersetzt',
     translation: 'Übersetzung',
-    hide: 'Übersetzung ausblenden',
-    show: 'Übersetzung anzeigen',
-    showOriginal: 'Original anzeigen',
+    original: 'Original',
     translatedFrom: '(übersetzt, Original auf {language})',
     translatedMark: '(übersetzt)',
     recent: 'Letzte {count} Antworten',
     recentOne: 'Letzte Antwort',
-    showAll: 'Übersetzungen zeigen',
-    showAllOriginals: 'Originale zeigen',
-    hideAll: 'Übersetzungen ausblenden',
-    copy: 'Kopieren',
-    copied: 'Übersetzung kopiert',
     retry: 'Erneut versuchen',
     failed: 'Übersetzung fehlgeschlagen: {reason}',
     reasons: {
@@ -674,8 +609,14 @@ function turnsOf(units: Unit[]): TurnUnits[] {
 
 // How the notes hang on the final replies, as `turns` keeps it.
 function turnMapOf(units: Unit[]): Turns {
-  const map: Turns = { noteOf: {}, notesOf: {} }
+  const map: Turns = { noteOf: {}, notesOf: {}, languageOf: {} }
   for (const turn of turnsOf(units)) {
+    for (const final of turn.finals) {
+      const language = replyLanguage(final.text)
+      if (language !== undefined) {
+        map.languageOf[final.id] = language
+      }
+    }
     if (turn.notes.length === 0) {
       continue
     }
@@ -1163,70 +1104,89 @@ async function runLimited(tasks: (() => Promise<unknown>)[], limit: number) {
   await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
 }
 
-// A translation that was open and is hidden now: a press shows it again.
-function hasHiddenTranslation(reply: Reply | undefined): boolean {
-  return (
-    reply?.status === 'done' &&
-    reply.isHidden &&
-    reply.language !== undefined &&
-    reply.texts[reply.language] !== undefined
-  )
+// What a turn shows when it shows no translation: its parts as written.
+const ORIGINAL = ''
+
+// A part of a turn as its buttons see it: the language it is written in, when
+// recognised, and its translations.
+type Part = { language?: string; reply: Reply | undefined }
+
+// Whether a part reads in `target`: it shows its translation into it, or it
+// is written in it and shows none.
+function readsIn(part: Part, target: Target): boolean {
+  return isShowing(part.reply)
+    ? part.reply?.language === target.key
+    : target.family !== undefined && part.language === target.family
 }
 
-// Puts a final reply's whole turn in `target`, as a press on its buttons does:
-// a unit written in that language shows as it is, the rest are translated, a
-// kept translation costing no call, a few at a time.
-async function translateTurn($: EngineInterface, settings: Settings, id: string, text: string, target: Target) {
+// The mode a turn's buttons mark: ORIGINAL when it shows no translation,
+// else the language it shows, the first part's (the reply's) when its parts
+// show more than one.
+function modeOf(parts: Part[]): string {
+  return parts.find(part => isShowing(part.reply))?.reply?.language ?? ORIGINAL
+}
+
+// The mode the band marks: the one every recent turn is in. ORIGINAL when
+// none shows a translation; a language when each of their parts reads in it;
+// none when they differ.
+function sharedMode(turnParts: Part[][], targets: Target[]): string | undefined {
+  if (turnParts.every(parts => !parts.some(part => isShowing(part.reply)))) {
+    return ORIGINAL
+  }
+
+  return targets.find(target => turnParts.every(parts => parts.every(part => readsIn(part, target))))?.key
+}
+
+// The work of putting units in `target`: a unit written in that language
+// shows as it is, the rest are translated, a kept translation costing no
+// call. A unit being translated is left to finish.
+async function languageTasks(
+  $: EngineInterface,
+  settings: Settings,
+  units: FinalReply[],
+  target: Target,
+): Promise<(() => Promise<unknown>)[]> {
   const tasks: (() => Promise<unknown>)[] = []
-  for (const unit of await turnOfReply($, settings.translateAll, id, text)) {
+  for (const unit of units) {
+    const reply = await currentReply($, unit.id, unit.text)
+    if (reply?.status === 'running') {
+      continue
+    }
     if (target.family !== undefined && replyLanguage(unit.text) === target.family) {
-      if (isShowing(await currentReply($, unit.id, unit.text))) {
+      if (isShowing(reply)) {
         tasks.push(() => setHidden($, unit.id, true))
       }
       continue
     }
     tasks.push(() => translate($, settings.model, unit.id, unit.text, target))
   }
-  await runLimited(tasks, CONTROL_PARALLEL)
+
+  return tasks
 }
 
-// Hides the open translations of a turn's units, or shows again those hidden.
-async function setTurnHidden($: EngineInterface, ids: string[], isHidden: boolean) {
+// Puts a final reply's whole turn in `target`, as a press on its language
+// does, a few units at a time.
+async function translateTurn($: EngineInterface, settings: Settings, id: string, text: string, target: Target) {
+  const units = await turnOfReply($, settings.translateAll, id, text)
+  await runLimited(await languageTasks($, settings, units, target), CONTROL_PARALLEL)
+}
+
+// Hides the open translations of a turn's units: the originals show again,
+// each translation a press away.
+async function hideTurn($: EngineInterface, ids: string[]) {
   for (const id of ids) {
-    const reply = await currentReply($, id)
-    if (isHidden ? isShowing(reply) : hasHiddenTranslation(reply)) {
-      await setHidden($, id, isHidden)
+    if (isShowing(await currentReply($, id))) {
+      await setHidden($, id, true)
     }
   }
 }
 
-// Opens a translation on each unit of the last few turns, as their buttons
-// would: one shown before shows again, in the language it was in; else the
-// unit is translated into the main language, or without one into the turn's
-// main target, a kept translation costing no call. A unit already in that
-// language is left as it is.
-async function showAllTranslations($: EngineInterface, settings: Settings, ui: string) {
-  const targets = targetsFor(settings, ui)
+// Puts each of the last few turns in `target`, as a press on that language
+// under each of their replies would.
+async function translateRecent($: EngineInterface, settings: Settings, target: Target) {
   const tasks: (() => Promise<unknown>)[] = []
   for (const units of await recentTurns($, settings.controlRange, settings.translateAll)) {
-    const target = settings.primary ?? turnTargets(targets, units.map(unit => replyLanguage(unit.text)))[0]
-    if (target === undefined) {
-      continue
-    }
-    for (const { id, text } of units) {
-      if (target.family !== undefined && replyLanguage(text) === target.family) {
-        continue
-      }
-      const reply = await currentReply($, id, text)
-      if (reply?.status === 'running' || isShowing(reply)) {
-        continue
-      }
-      if (hasHiddenTranslation(reply)) {
-        tasks.push(() => setHidden($, id, false))
-        continue
-      }
-      tasks.push(() => translate($, settings.model, id, text, target))
-    }
+    tasks.push(...(await languageTasks($, settings, units, target)))
   }
   await runLimited(tasks, CONTROL_PARALLEL)
 }
@@ -1240,13 +1200,6 @@ async function hideAllTranslations($: EngineInterface, settings: Settings) {
         await setHidden($, id, true)
       }
     }
-  }
-}
-
-async function copyText($: EngineInterface, text: string, surface: Surface, message: string) {
-  const result = await $.ui.copy({ text, surface })
-  if (result.isCopied) {
-    $.ui.toast(message)
   }
 }
 
@@ -1450,94 +1403,79 @@ export const register: Register = (on, options) => {
       targets.find(target => target.key === key) ??
       (key === undefined ? undefined : { key, promptName: key })
     const label = (target: Target) => (target.family === undefined ? target.key : nameOf(target.key, ui))
-    // The language the turn was last put in: that of any unit asked of.
-    const current = targetOf(units.find(unit => unit?.status !== undefined && unit.language !== undefined)?.language)
     const ids = [...notes.map(note => note.id), id]
-    const toButton = (target: Target, isMain: boolean) => (
+    // The turn's mode, which its buttons mark: its button checked and at full
+    // strength, the rest dim. Original, or the language it shows. A press on a
+    // language puts the whole turn in it, one language at a time; Original
+    // shows the turn as written.
+    const parts: Part[] = [
+      { language: ownLanguage, reply },
+      ...notes.map((note, i): Part => ({ language: note.language, reply: noteReplies[i] })),
+    ]
+    const mode = modeOf(parts)
+    const segment = (key: string, name: string, onPress: () => Promise<void>) => (
       <Button
-        key={`to-${target.key}-${id}`}
-        label={isMain ? `${s.translate} · ${label(target)}` : label(target)}
-        dimColor={!isMain}
-        onPress={() => translateTurn($, settings, id, text, target)}
+        key={`mode-${key === ORIGINAL ? 'original' : key}-${id}`}
+        label={key === mode ? markedLabel(name) : name}
+        dimColor={key !== mode}
+        onPress={onPress}
       />
     )
-    const others = offered.filter(target => target.key !== current?.key).map(target => toButton(target, false))
+    const modes = [
+      segment(ORIGINAL, s.original, () => hideTurn($, ids)),
+      ...offered.map(target => segment(target.key, label(target), () => translateTurn($, settings, id, text, target))),
+    ]
     const failed = units.find(unit => unit?.status === 'error')
+    const failedTarget = targetOf(failed?.language)
 
     let panel
     let toolbar
     // While a translation of the turn is open its buttons stay, hover or not.
-    let isOpen = false
+    const isOpen = mode !== ORIGINAL
     // With replaceOriginal, an open translation is drawn where the reply was.
     const isReplaced = replacement !== undefined
-    if (current === undefined) {
-      toolbar = offered.map((target, i) => toButton(target, i === 0))
-    } else if (units.some(unit => unit?.status === 'running')) {
+    if (units.some(unit => unit?.status === 'running')) {
       // Each unit shows its own progress; the buttons wait for them all.
-      if (reply?.status === 'running') {
-        panel = <Progress label={`${s.translating} · ${label(current)}`} />
+      const running = targetOf(reply?.status === 'running' ? reply.language : undefined)
+      if (running !== undefined) {
+        panel = <Progress label={`${s.translating} · ${label(running)}`} />
       }
-    } else if (failed !== undefined) {
-      const retry = (
-        <Button
-          key={`retry-${id}`}
-          label={s.retry}
-          dimColor
-          onPress={() => translateTurn($, settings, id, text, current)}
-        />
-      )
-      if (reply?.status === 'error') {
-        const reason = s.reasons[failed.error ?? ''] ?? failed.error ?? ''
-        panel = (
-          <Box flexDirection="row" gap="sm">
-            <Text color="error">{s.failed.replace('{reason}', reason)}</Text>
-            {retry}
-          </Box>
+    } else {
+      toolbar = modes
+      if (failed !== undefined && failedTarget !== undefined) {
+        const retry = (
+          <Button
+            key={`retry-${id}`}
+            label={s.retry}
+            dimColor
+            onPress={() => translateTurn($, settings, id, text, failedTarget)}
+          />
         )
-        toolbar = others
-      } else {
-        // A note failed: it says why under itself.
-        toolbar = [retry, ...others]
+        if (reply?.status === 'error') {
+          const reason = s.reasons[failed.error ?? ''] ?? failed.error ?? ''
+          panel = (
+            <Box flexDirection="row" gap="sm">
+              <Text color="error">{s.failed.replace('{reason}', reason)}</Text>
+              {retry}
+            </Box>
+          )
+        } else {
+          // A note failed: it says why under itself.
+          toolbar = [...modes, retry]
+        }
       }
-    } else if (units.some(isShowing)) {
-      isOpen = true
-      const translated = isShowing(reply) ? reply?.texts[current.key] : undefined
+      const shownIn = isShowing(reply) ? targetOf(reply?.language) : undefined
+      const translated = shownIn === undefined ? undefined : reply?.texts[shownIn.key]
       // In the reply's place the engine draws the translation (`drawn`), its
       // mark at its end: no panel.
-      if (translated !== undefined && !isReplaced) {
+      if (shownIn !== undefined && translated !== undefined && !isReplaced) {
         panel = (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            <Text dimColor>{`${s.translation} · ${label(current)}`}</Text>
+            <Text dimColor>{`${s.translation} · ${label(shownIn)}`}</Text>
             <Markdown text={translated} />
           </Box>
         )
       }
-      toolbar = [
-        <Button
-          key={`hide-${id}`}
-          label={settings.replaceOriginal ? s.showOriginal : s.hide}
-          dimColor
-          onPress={() => setTurnHidden($, ids, true)}
-        />,
-        ...(translated === undefined
-          ? []
-          : [
-              <Button
-                key={`copy-${id}`}
-                label={s.copy}
-                dimColor
-                onPress={press => copyText($, translated, press.surface, s.copied)}
-              />,
-            ]),
-        ...others,
-      ]
-    } else if (units.some(hasHiddenTranslation)) {
-      toolbar = [
-        <Button key={`show-${id}`} label={s.show} onPress={() => setTurnHidden($, ids, false)} />,
-        ...others,
-      ]
-    } else {
-      toolbar = offered.map((target, i) => toButton(target, i === 0))
     }
 
     // On the desktop the buttons show while the pointer is over the reply, in
@@ -1588,26 +1526,62 @@ export const register: Register = (on, options) => {
     // a note goes with its reply and is not counted.
     const known = await read($, finals)
     const grouped = await read($, groups)
-    const noteOf = (await read($, turns)).noteOf
-    const count = known.filter(blockId => grouped[blockId]?.isLast !== false && noteOf[blockId] === undefined).length
-    if (count === 0) {
+    const turnMap = await read($, turns)
+    const replyIds = known
+      .filter(blockId => grouped[blockId]?.isLast !== false && turnMap.noteOf[blockId] === undefined)
+      .map(blockId => grouped[blockId]?.reply ?? blockId)
+    if (replyIds.length === 0) {
       return next(e)
     }
     const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
     const s = STRINGS[ui] ?? EN
-    const shown = Math.min(count, settings.controlRange)
+    const recent = replyIds.slice(-settings.controlRange)
+    const shown = recent.length
+    const targets = targetsFor(settings, ui)
+    // The mode every recent turn is in, which the band marks; none when they
+    // differ.
+    const turnParts: Part[][] = []
+    for (const replyId of recent) {
+      const notes = settings.translateAll ? (turnMap.notesOf[replyId] ?? []) : []
+      const parts: Part[] = [{ language: turnMap.languageOf[replyId], reply: await currentReply($, replyId) }]
+      for (const note of notes) {
+        parts.push({ language: note.language, reply: await currentReply($, note.id) })
+      }
+      turnParts.push(parts)
+    }
+    // Seen in use: with only Chinese replies in range, Simplified Chinese did
+    // nothing at all. Only a language some recent part is not written in is
+    // offered, as under a reply; with none to offer the band draws nothing.
+    const offered = targets.filter(target =>
+      turnParts.some(parts =>
+        parts.some(part => target.family === undefined || part.language === undefined || part.language !== target.family),
+      ),
+    )
+    if (offered.length === 0) {
+      return next(e)
+    }
+    const mode = sharedMode(turnParts, offered)
     const { Box, Button, Text } = $.ui.resolve(e)
+    const segment = (key: string, name: string, onPress: () => Promise<void>) => (
+      <Button
+        key={`rt-${key === ORIGINAL ? 'original' : key}`}
+        label={key === mode ? markedLabel(name) : name}
+        dimColor={key !== mode}
+        onPress={onPress}
+      />
+    )
 
     return (
       <Box flexDirection="row" gap="sm">
         <Text dimColor>{shown === 1 ? s.recentOne : s.recent.replace('{count}', String(shown))}</Text>
-        <Button key="rt-show-all" label={s.showAll} onPress={() => showAllTranslations($, settings, ui)} />
-        <Button
-          key="rt-hide-all"
-          label={settings.replaceOriginal ? s.showAllOriginals : s.hideAll}
-          dimColor
-          onPress={() => hideAllTranslations($, settings)}
-        />
+        {segment(ORIGINAL, s.original, () => hideAllTranslations($, settings))}
+        {offered.map(target =>
+          segment(
+            target.key,
+            target.family === undefined ? target.key : nameOf(target.key, ui),
+            () => translateRecent($, settings, target),
+          ),
+        )}
       </Box>
     )
   })

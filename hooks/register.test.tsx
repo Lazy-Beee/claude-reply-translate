@@ -105,6 +105,21 @@ async function drawn(ui: Mounted): Promise<string[]> {
 // it was translated from ends its last line.
 const replaced = (text: string, from: string) => `${text} *(translated from ${from})*`
 
+// The name on the button marked as what the reply, or the band, shows now:
+// the one checked and not drawn dim.
+async function marked(ui: Mounted): Promise<string | undefined> {
+  const found = (await ui.findAll({ type: 'Button' })).filter(button => button.props.dimColor !== true)
+  const checked = found.filter(button => String(button.props.label).startsWith('✓ '))
+  expect(checked).toHaveLength(found.length)
+
+  return found[0] === undefined ? undefined : String(found[0].props.label).slice(2)
+}
+
+// The names on the buttons, the check left out.
+async function labels(ui: Mounted): Promise<string[]> {
+  return (await ui.findAll({ type: 'Button' })).map(button => String(button.props.label).replace(/^✓ /, ''))
+}
+
 // Targets as a Chinese reader would set them; the defaults are `auto` and no
 // main language.
 const CHINESE_READER = { options: { languages: 'zh-CN, en' } }
@@ -121,7 +136,8 @@ test('an English reply offers Simplified Chinese, translates, hides and shows ag
 
     const final = await $.ui.mount({ ...reply(FINAL_EN), surface })
     const main = await final.find({ type: 'Button', text: /Simplified Chinese/ })
-    expect(main?.props.label).toBe('Translate · Simplified Chinese')
+    expect(main?.props.label).toBe('Simplified Chinese')
+    expect(await marked(final)).toBe('Original')
     // The reply is English, so English is not offered.
     expect(await final.find({ type: 'Button', text: /English/ })).toBeUndefined()
     await final.unmount()
@@ -143,13 +159,19 @@ test('an English reply offers Simplified Chinese, translates, hides and shows ag
   const kept = store.get(`t:${fingerprint(FINAL_EN)}`) as { texts: Record<string, string> } | undefined
   expect(kept?.texts['zh-Hans']).toBe('ZH-TEXT')
 
-  const hide = await ui.find({ type: 'Button', text: /Hide translation/ })
-  await ui.press({ key: String(hide?.key) })
+  // The buttons mark what the reply shows, Original or a language, with a
+  // check on it.
+  expect(await marked(ui)).toBe('Simplified Chinese')
+  expect((await ui.find({ type: 'Button', text: /Simplified Chinese/ }))?.props.label).toBe('✓ Simplified Chinese')
+  const original = await ui.find({ type: 'Button', text: /^(✓ )?Original$/ })
+  await ui.press({ key: String(original?.key) })
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await marked(ui)).toBe('Original')
 
-  const show = await ui.find({ type: 'Button', text: /Show translation/ })
-  await ui.press({ key: String(show?.key) })
+  const again = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(again?.key) })
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
+  expect(await marked(ui)).toBe('Simplified Chinese')
   expect(asked).toHaveLength(1)
   await ui.unmount()
 })
@@ -159,14 +181,12 @@ test('a Chinese reply offers English; a Japanese one both, and a language seen b
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const chinese = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
-  expect((await chinese.find({ type: 'Button', text: /English/ }))?.props.label).toBe('Translate · English')
+  expect((await chinese.find({ type: 'Button', text: /English/ }))?.props.label).toBe('English')
   expect(await chinese.find({ type: 'Button', text: /Simplified Chinese/ })).toBeUndefined()
   await chinese.unmount()
 
   const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
-  expect((await ui.find({ type: 'Button', text: /Simplified Chinese/ }))?.props.label).toBe(
-    'Translate · Simplified Chinese',
-  )
+  expect((await ui.find({ type: 'Button', text: /Simplified Chinese/ }))?.props.label).toBe('Simplified Chinese')
   const english = await ui.find({ type: 'Button', text: /English/ })
   expect(english?.props.label).toBe('English')
 
@@ -191,7 +211,7 @@ test("the buttons and the default targets follow Claude Code's language setting"
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
-  expect((await ui.find({ type: 'Button' }))?.props.label).toBe('翻译 · 简体中文')
+  expect(await labels(ui)).toEqual(['原文', '简体中文'])
   await ui.unmount()
 })
 
@@ -243,7 +263,7 @@ test('a reply in another language is translated into the main language as its tu
 
   // Pressing shows it with no second call.
   const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
-  expect(main?.props.label).toBe('Translate · Simplified Chinese')
+  expect(main?.props.label).toBe('Simplified Chinese')
   await ui.press({ key: String(main?.key) })
   let shown = await ui.find({ type: 'Markdown' })
   for (let i = 0; i < 50 && shown === undefined; i++) {
@@ -288,7 +308,7 @@ test(
     const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
     expect((await ui.find({ type: 'Markdown' }))?.text).toBe('ZH-TEXT')
     expect(asked).toHaveLength(1)
-    expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeDefined()
+    expect(await marked(ui)).toBe('Simplified Chinese')
     await ui.unmount()
   },
 )
@@ -373,7 +393,7 @@ test('with replaceOriginal the main-language translation is made and takes the p
   // The engine draws the translation in the reply's place, in its own style.
   expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', 'English')])
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
+  expect(await marked(ui)).toBe('Simplified Chinese')
   await ui.unmount()
 })
 
@@ -389,13 +409,13 @@ test('with replaceOriginal a translation into another language takes the place o
 
   expect(await drawn(ui)).toEqual([replaced('EN-TEXT', 'Japanese')])
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
-  expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeUndefined()
+  expect(await marked(ui)).toBe('English')
 
   const chinese = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
   await ui.press({ key: String(chinese?.key) })
   expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', 'Japanese')])
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await marked(ui)).toBe('Simplified Chinese')
   await ui.unmount()
 })
 
@@ -412,7 +432,7 @@ test(
     await ui.press({ key: String(main?.key) })
 
     expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', 'English')])
-    expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeDefined()
+    expect(await marked(ui)).toBe('Simplified Chinese')
     await ui.unmount()
   },
 )
@@ -427,13 +447,12 @@ test('with replaceOriginal an open main-language translation takes the place of 
   expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', 'English')])
   expect(await ui.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
 
-  // Showing the original puts the reply back and keeps the translation a
-  // press away.
-  const showOriginal = await ui.find({ type: 'Button', text: /Show original/ })
-  await ui.press({ key: String(showOriginal?.key) })
+  // Original puts the reply back and keeps the translation a press away.
+  const original = await ui.find({ type: 'Button', text: /^(✓ )?Original$/ })
+  await ui.press({ key: String(original?.key) })
   expect(await drawn(ui)).toEqual([FINAL_EN])
   expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+  expect(await marked(ui)).toBe('Original')
   await ui.unmount()
 })
 
@@ -505,13 +524,13 @@ test('a kept translation still in the reply\'s own language is dropped and the r
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const ui = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
-  // The kept text is the reply itself, so only the missing heading and Show
-  // original button tell that it is not drawn in the reply's place.
+  // The kept text is the reply itself, so only the missing heading and the
+  // Original mark tell that it is not drawn in the reply's place.
   expect(await ui.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', text: /Show original/ })).toBeUndefined()
+  expect(await marked(ui)).toBe('Original')
   expect(await drawn(ui)).toEqual([FINAL_JA])
   const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
-  expect(main?.props.label).toBe('Translate · Simplified Chinese')
+  expect(main?.props.label).toBe('Simplified Chinese')
 
   await ui.press({ key: String(main?.key) })
   expect(asked).toHaveLength(1)
@@ -552,7 +571,7 @@ test(
 
     const final = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
     const main = await final.find({ type: 'Button', text: /Simplified Chinese/ })
-    expect(main?.props.label).toBe('Translate · Simplified Chinese')
+    expect(main?.props.label).toBe('Simplified Chinese')
     await final.press({ key: String(main?.key) })
     expect(asked).toHaveLength(2)
     const prompts = asked.map(call => call.prompt).join('\n')
@@ -566,8 +585,8 @@ test(
     expect(await note.find({ type: 'Button' })).toBeUndefined()
     await note.unmount()
 
-    // Hiding the reply's translation hides the note's too.
-    const hide = await final.find({ type: 'Button', text: /Hide translation/ })
+    // Original on the reply hides the note's translation too.
+    const hide = await final.find({ type: 'Button', text: /^(✓ )?Original$/ })
     await final.press({ key: String(hide?.key) })
     const hidden = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
     expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
@@ -763,13 +782,15 @@ test(
     const final = await $.ui.mount({ ...reply(FINAL_ZH_NEXT), surface: 'desktop' })
     expect(await drawn(final)).toEqual([FINAL_ZH_NEXT])
     expect(await final.find({ type: 'Text', text: /Translation ·/ })).toBeUndefined()
-    expect(await final.find({ type: 'Button', text: /Copy/ })).toBeUndefined()
-    const showOriginal = await final.find({ type: 'Button', text: /Show original/ })
+    // The turn reads in Chinese: its note shows the translation.
+    expect(await marked(final)).toBe('Simplified Chinese')
+    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English'])
+    const showOriginal = await final.find({ type: 'Button', text: /^(✓ )?Original$/ })
     await final.press({ key: String(showOriginal?.key) })
     const original = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
     expect(await drawn(original)).toEqual([NOTE])
     await original.unmount()
-    expect(await final.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+    expect(await marked(final)).toBe('Original')
 
     // English for the turn: the reply is translated, the note is English.
     const english = await final.find({ type: 'Button', text: /English/ })
@@ -779,6 +800,25 @@ test(
     const inEnglish = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
     expect(await drawn(inEnglish)).toEqual([NOTE])
     await inEnglish.unmount()
+    expect(await marked(final)).toBe('English')
+
+    // Seen in use: a turn put in English, shown as written and then shown
+    // again, came back with the note in Chinese and the reply in English. A
+    // press on a language puts the whole turn in it, from what was kept.
+    const hide = await final.find({ type: 'Button', text: /^(✓ )?Original$/ })
+    await final.press({ key: String(hide?.key) })
+    expect(await drawn(final)).toEqual([FINAL_ZH_NEXT])
+    expect(await marked(final)).toBe('Original')
+    const chinese = await final.find({ type: 'Button', text: /Simplified Chinese/ })
+    await final.press({ key: String(chinese?.key) })
+    expect(asked).toHaveLength(2)
+    expect(await drawn(final)).toEqual([FINAL_ZH_NEXT])
+    const inChinese = await $.ui.mount({ ...reply(NOTE), surface: 'desktop' })
+    expect(await drawn(inChinese)).toEqual([replaced('ZH-TEXT', 'English')])
+    await inChinese.unmount()
+    expect(await marked(final)).toBe('Simplified Chinese')
+    // The buttons stay put: Original and both languages, whatever it shows.
+    expect(await labels(final)).toEqual(['Original', 'Simplified Chinese', 'English'])
     await final.unmount()
   },
 )
@@ -793,7 +833,7 @@ test(
 
     const row = await $.ui.mount(band)
     expect(await row.find({ type: 'Text', text: /Last 3 replies/ })).toBeDefined()
-    const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+    const showAll = await row.find({ type: 'Button', text: /Simplified Chinese/ })
     await row.press({ key: String(showAll?.key) })
     expect(asked).toHaveLength(3)
     const note = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
@@ -810,12 +850,14 @@ test('the band above the prompt shows and hides the translations of the last rep
 
   const row = await $.ui.mount(band)
   expect(await row.find({ type: 'Text', text: /Last 3 replies/ })).toBeDefined()
-  const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+  const showAll = await row.find({ type: 'Button', text: /Simplified Chinese/ })
   await row.press({ key: String(showAll?.key) })
 
   // The English and the Japanese reply are translated into the main
   // language; the Chinese one is in it already.
   expect(asked).toHaveLength(2)
+  // Every recent turn reads in Chinese now, the Chinese one as written.
+  expect(await marked(row)).toBe('Simplified Chinese')
   for (const [text, from] of [[FINAL_EN, 'English'], [FINAL_JA, 'Japanese']] as const) {
     const ui = await $.ui.mount({ ...reply(text), surface: 'desktop' })
     expect(await drawn(ui)).toEqual([replaced('ZH-TEXT', from)])
@@ -825,11 +867,12 @@ test('the band above the prompt shows and hides the translations of the last rep
   expect(await drawn(chinese)).toEqual([FINAL_ZH])
   await chinese.unmount()
 
-  const showOriginals = await row.find({ type: 'Button', text: /Show originals/ })
+  const showOriginals = await row.find({ type: 'Button', text: /^(✓ )?Original$/ })
   await row.press({ key: String(showOriginals?.key) })
+  expect(await marked(row)).toBe('Original')
   const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
   expect(await drawn(english)).toEqual([FINAL_EN])
-  expect(await english.find({ type: 'Button', text: /Show translation/ })).toBeDefined()
+  expect(await marked(english)).toBe('Original')
   await english.unmount()
 
   // Shown again from what was kept: no call.
@@ -838,6 +881,33 @@ test('the band above the prompt shows and hides the translations of the last rep
   const again = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
   expect(await drawn(again)).toEqual([replaced('ZH-TEXT', 'English')])
   await again.unmount()
+  expect(await marked(row)).toBe('Simplified Chinese')
+
+  // One reply put in English on its own: the turns differ, so the band marks
+  // nothing.
+  const japanese = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  const toEnglish = await japanese.find({ type: 'Button', text: /English/ })
+  await japanese.press({ key: String(toEnglish?.key) })
+  expect(await marked(japanese)).toBe('English')
+  await japanese.unmount()
+  expect(await marked(row)).toBeUndefined()
+  await row.unmount()
+})
+
+// Seen in use: with only Chinese replies in range, Simplified Chinese on the
+// band did nothing. It offers only the languages a recent reply can be put in.
+test('the band offers only the languages the recent replies can be put in', REPLACING, async ($, on) => {
+  const { asked } = engine(on, { messages: () => MESSAGES.slice(4, 6) })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Text', text: /Last reply/ })).toBeDefined()
+  expect(await labels(row)).toEqual(['Original', 'English'])
+  expect(await marked(row)).toBe('Original')
+  const english = await row.find({ type: 'Button', text: /English/ })
+  await row.press({ key: String(english?.key) })
+  expect(asked).toHaveLength(1)
+  expect(await marked(row)).toBe('English')
   await row.unmount()
 })
 
@@ -850,7 +920,7 @@ test(
 
     const row = await $.ui.mount(band)
     expect(await row.find({ type: 'Text', text: /Last reply/ })).toBeDefined()
-    const showAll = await row.find({ type: 'Button', text: /Show translations/ })
+    const showAll = await row.find({ type: 'Button', text: /Simplified Chinese/ })
     await row.press({ key: String(showAll?.key) })
 
     expect(asked).toHaveLength(1)
@@ -869,20 +939,26 @@ test('without replaceOriginal the band opens and hides translations under the re
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const row = await $.ui.mount(band)
-  const showAll = await row.find({ type: 'Button', text: /Show translations/ })
-  await row.press({ key: String(showAll?.key) })
-  expect(asked).toHaveLength(3)
+  expect(await labels(row)).toEqual(['Original', 'Simplified Chinese', 'English'])
+  expect(await marked(row)).toBe('Original')
+  // English for all: the Chinese and the Japanese reply are translated, the
+  // English one is in it already.
+  const english = await row.find({ type: 'Button', text: /English/ })
+  await row.press({ key: String(english?.key) })
+  expect(asked).toHaveLength(2)
+  expect(await marked(row)).toBe('English')
 
   const chinese = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
   expect((await chinese.find({ type: 'Markdown' }))?.text).toBe('EN-TEXT')
   expect(await drawn(chinese)).toEqual([FINAL_ZH])
   await chinese.unmount()
 
-  const hideAll = await row.find({ type: 'Button', text: /Hide translations/ })
+  const hideAll = await row.find({ type: 'Button', text: /^(✓ )?Original$/ })
   await row.press({ key: String(hideAll?.key) })
   const hidden = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
   expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
   await hidden.unmount()
+  expect(await marked(row)).toBe('Original')
   await row.unmount()
 })
 
@@ -920,7 +996,7 @@ test('with skipPrimaryReplies a main-language reply keeps a translation it alrea
 
   const ui = await $.ui.mount({ ...reply(FINAL_ZH), surface: 'desktop' })
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe('KEPT')
-  expect(await ui.find({ type: 'Button', text: /Hide translation/ })).toBeDefined()
+  expect(await marked(ui)).toBe('English')
   await ui.unmount()
 })
 
@@ -950,7 +1026,7 @@ test('a reply of several blocks gets one set of buttons, under its last block, f
 
   const last = await $.ui.mount({ ...reply(PART_TWO), surface: 'desktop' })
   const main = await last.find({ type: 'Button', text: /Simplified Chinese/ })
-  expect(main?.props.label).toBe('Translate · Simplified Chinese')
+  expect(main?.props.label).toBe('Simplified Chinese')
   await last.press({ key: String(main?.key) })
 
   expect(asked).toHaveLength(1)
@@ -1018,12 +1094,12 @@ test('a reply gets its buttons when the history arrives after session.start', CH
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
-  let button = await ui.find({ type: 'Button', text: /Translate/ })
+  let button = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
   for (let i = 0; i < 50 && button === undefined; i++) {
-    button = await ui.find({ type: 'Button', text: /Translate/ })
+    button = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
   }
 
   expect(reads > 1).toBe(true)
-  expect(button?.props.label).toBe('Translate · Simplified Chinese')
+  expect(button?.props.label).toBe('Simplified Chinese')
   await ui.unmount()
 })

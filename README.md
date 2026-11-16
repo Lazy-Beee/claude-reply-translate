@@ -5,17 +5,17 @@
 A Claude Code mod that adds translate buttons under Claude's **final reply** of each turn in the desktop app's Code tab. The text Claude writes between tool calls while it works gets no buttons. It installs as the plugin `reply-translate`.
 
 ```
-[Translate · Simplified Chinese] [English]
+[✓ Original] [Simplified Chinese] [English]
 ```
 
-- **Pick a language, get a translation.** The translation opens in a bordered box under the reply. Code blocks, inline code, commands, file paths, URLs and identifiers are left as they are.
-- **The main button picks the target for you.** It is the first of your target languages that is not the reply's own language. The reply's language is worked out locally from its prose, so an English reply offers Chinese and a Chinese reply offers English.
+- **Pick a language, get a translation.** Under each final reply sit **Original** and a button for each target language; the one checked (✓) is what the reply shows now. A language shows the reply in it, **Original** shows it as written. The translation opens in a bordered box under the reply. Code blocks, inline code, commands, file paths, URLs and identifiers are left as they are.
+- **Only the languages it needs.** A language the reply is written in gets no button. The reply's language is worked out locally from its prose, so an English reply offers Chinese and a Chinese reply offers English.
 - **Always at hand, or out of the way.** The buttons always show by default. Turn `alwaysShowButtons` off and, on the desktop, they show only while the pointer is over the reply, floating in a fixed strip, so showing them does not shift the conversation.
 - **Each language is translated once per reply.** Translations are cached by language and kept between sessions.
 - **Ready before you ask (optional).** Set a main language and replies in other languages are translated into it in the background as each turn ends. With `autoExpand` on, the translation opens by itself.
-- **Read in your language (optional).** With `replaceOriginal` on, a translation takes the place of the reply instead of opening under it, so each reply shows in one language at a time. A **Show original** button brings the reply back. With a main language set too, replies in other languages are translated into it as each turn ends and shown in its place, with no press. A translation in place ends with a short mark on its last line, such as *(translated from English)*, so you can tell it from what Claude wrote.
+- **Read in your language (optional).** With `replaceOriginal` on, a translation takes the place of the reply instead of opening under it, so each reply shows in one language at a time. **Original** brings the reply back. With a main language set too, replies in other languages are translated into it as each turn ends and shown in its place, with no press. A translation in place ends with a short mark on its last line, such as *(translated from English)*, so you can tell it from what Claude wrote.
 - **Everything Claude writes (optional).** With `translateAll` on, the notes Claude writes between tool calls while it works are translated too. They get no buttons of their own: the buttons under the turn's final reply act on the whole turn, notes included, and the row above the prompt on the last few turns.
-- **All recent replies at once.** A row above the prompt shows or hides the translations of the last few final replies (10 by default) in one press. Only those replies are touched, so a long conversation costs no more than a short one.
+- **All recent replies at once.** A row above the prompt has the same buttons for the last few final replies (10 by default): one press puts them all in a language, or back as written. Its checked button is the language they all read in; when they differ, none is. A language none of them can be put in, such as Chinese when they are all written in Chinese, gets no button. Only those replies are touched, so a long conversation costs no more than a short one.
 - **Buttons in your language.** The button text follows Claude Code's `language` setting, then the system language. It is available in English, Simplified and Traditional Chinese, Japanese, Korean, Spanish, French and German.
 
 ## Requirements
@@ -74,15 +74,15 @@ Options live in `~/.claude/settings.json` under `pluginConfigs`, keyed by the pl
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `languages` | `auto` | The languages to translate into, comma-separated: tags such as `zh-CN`, `zh-TW`, `en`, `ja`, or names such as `Japanese`. Each gets a button, and their order decides the main one. `auto` means the button language, then English. |
+| `languages` | `auto` | The languages to translate into, comma-separated: tags such as `zh-CN`, `zh-TW`, `en`, `ja`, or names such as `Japanese`. Each gets a button, in this order. `auto` means the button language, then English. |
 | `primaryLanguage` | empty (off) | Your own language. As each turn ends, a final reply in another language is translated into it in the background, so pressing the button shows it at once. It also comes first among the targets. |
 | `autoExpand` | `false` | Needs a main language. When on, those background translations open by themselves, with a progress bar while they run. |
-| `replaceOriginal` | `false` | When on, a translation in any language is shown in place of the reply rather than under it, so the reply shows in one language at a time. **Show original** brings the reply back. With a main language set, the translation into it is also made as each turn ends and shown with no press; this wins over `autoExpand`. A translation in place ends with a mark such as *(translated from English)* on its last line, in the interface language; after a code block, a table or a heading it takes a line of its own. |
+| `replaceOriginal` | `false` | When on, a translation in any language is shown in place of the reply rather than under it, so the reply shows in one language at a time. **Original** brings the reply back. With a main language set, the translation into it is also made as each turn ends and shown with no press; this wins over `autoExpand`. A translation in place ends with a mark such as *(translated from English)* on its last line, in the interface language; after a code block, a table or a heading it takes a line of its own. |
 | `uiLanguage` | `auto` | The language of the buttons. `auto` follows Claude Code's `language` setting, then the system language. You can also give a tag such as `zh-CN`. |
 | `skipPrimaryReplies` | `false` | Needs a main language. When on, a reply already in your main language is left as it is: no buttons, and no room kept for them. A reply that has a translation open already still shows it. |
 | `alwaysShowButtons` | `true` | `true`: the buttons always show. `false`: on the desktop, they show only while the pointer is over the reply. |
-| `translateAll` | `false` | When on, the notes Claude writes between tool calls are translated too. A note has no buttons: the buttons under its turn's final reply put the whole turn in one language, and hide or show its translations together. A reply in your main language keeps its buttons when its notes are not. The notes show their translations as the reply does: in their place with `replaceOriginal`, else under them. With a main language set, each note is translated as soon as the tool call after it starts. |
-| `controlRange` | `10` | How many of the latest final replies the row above the prompt acts on. **Show translations** opens a translation on each: one shown before shows again, and a reply with none is translated into its main target, one model call each. With a main language set, replies already in it are skipped. The other button shows the originals again (**Show originals** with `replaceOriginal`, else **Hide translations**). `0` draws no row. |
+| `translateAll` | `false` | When on, the notes Claude writes between tool calls are translated too. A note has no buttons: the buttons under its turn's final reply put the whole turn in one language, and **Original** shows all of it as written. A reply in your main language keeps its buttons when its notes are not. The notes show their translations as the reply does: in their place with `replaceOriginal`, else under them. With a main language set, each note is translated as soon as the tool call after it starts. |
+| `controlRange` | `10` | How many of the latest final replies the row above the prompt acts on. A language puts each of them in it, as its own button does: a translation made before costs no call, one without one model call each, and a reply written in that language shows as it is. **Original** shows them all as written. `0` draws no row. |
 | `model` | `haiku` | The model used to translate: an alias or a full model id. |
 
 You can also set them from a shell. Every value is given as a string:
@@ -95,7 +95,7 @@ echo '{"languages":"zh-CN, en","primaryLanguage":"zh-CN","autoExpand":"true"}' |
 
 ## Cost
 
-Translations run through your session's own model client and credentials. On a Claude subscription they count toward your plan's usage; with an API key they are billed to your account. Each call shows in `/cost`. With a main language set, every final reply in another language costs one call, whether or not you open it. **Show translations** above the prompt costs one call for each of the recent replies that has no translation yet, `controlRange` of them at most. With `translateAll` and a main language, every note Claude writes in another language costs one call too.
+Translations run through your session's own model client and credentials. On a Claude subscription they count toward your plan's usage; with an API key they are billed to your account. Each call shows in `/cost`. With a main language set, every final reply in another language costs one call, whether or not you open it. A language pressed above the prompt costs one call for each of the recent replies that has no translation into it yet, `controlRange` of them at most. With `translateAll` and a main language, every note Claude writes in another language costs one call too.
 
 ## How it works
 

@@ -1,6 +1,6 @@
 {
   "name": "reply-translate",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Adds translate buttons under Claude's final reply of each turn",
   "author": { "name": "Lazy-Beee" },
   "license": "MIT",
@@ -9,7 +9,7 @@
     "languages": {
       "type": "string",
       "title": "Target languages",
-      "description": "Languages to translate into, comma-separated: tags such as zh-CN, zh-TW, en, ja, or names. The first one that is not the reply's own language is the main button. auto: the language the buttons are drawn in, then English",
+      "description": "Languages to translate into, comma-separated: tags such as zh-CN, zh-TW, en, ja, or names. Each gets a button under the reply, in this order, except the reply's own language. auto: the language the buttons are drawn in, then English",
       "default": "auto"
     },
     "primaryLanguage": {
@@ -33,7 +33,7 @@
     "replaceOriginal": {
       "type": "boolean",
       "title": "Show translations in place of the reply",
-      "description": "true: an open translation, in any language, takes the place of the reply, so the reply shows in one language at a time, with a button to show the original again. With a main language set, a final reply in another language is also translated into it as its turn ends, with no press; false: translations show under the reply",
+      "description": "true: an open translation, in any language, takes the place of the reply, so the reply shows in one language at a time, and Original shows it as written again. With a main language set, a final reply in another language is also translated into it as its turn ends, with no press; false: translations show under the reply",
       "default": false
     },
     "skipPrimaryReplies": {
@@ -57,7 +57,7 @@
     "controlRange": {
       "type": "number",
       "title": "Replies the band above the prompt acts on",
-      "description": "A row above the prompt shows or hides the translations of this many of the latest final replies at once; showing them translates those that have none yet, one model call each. 0: no row",
+      "description": "A row above the prompt puts this many of the latest final replies in one language at once, or back as written; a reply with no translation into that language yet costs one model call. 0: no row",
       "default": 10
     },
     "model": {

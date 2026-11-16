@@ -2,6 +2,18 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.10.0 (2026-11-16)
+
+### Changed
+
+- The buttons under a reply are **Original** and one for each target language, with a ✓ on the one for what the turn shows now. A language puts the whole turn in it, from translations made before where it can; **Original** shows it as written. They replace **Translate · …**, **Hide translation**, **Show original** and **Show translation**, whose meaning changed with what was open.
+  - A turn shows one language at a time. Before, showing a hidden translation again brought each part back in the language it was last in, so a turn put in English and hidden came back with its notes in Chinese and its reply in English.
+- The row above the prompt has the same buttons for the recent replies: a language puts them all in it, **Original** shows them all as written, and the checked button is the language they all read in, or none when they differ. A language none of them can be put in gets no button, so the row never shows one that does nothing. It replaces **Show translations**, **Show originals** and **Hide translations**.
+
+### Removed
+
+- The **Copy** button under an open translation. To copy a translation, select its text.
+
 ## 0.9.1 (2026-11-16)
 
 ### Changed
