@@ -1,8 +1,8 @@
-# reply-translate
+# claude-reply-translate
 
 [English](README.md)
 
-一个 Claude Code mod：在桌面应用的 Code 标签页里，给 Claude 每轮的**最终回复**加上翻译按钮。Claude 工作过程中、工具调用之间写的文字不加按钮。
+一个 Claude Code mod：在桌面应用的 Code 标签页里，给 Claude 每轮的**最终回复**加上翻译按钮。Claude 工作过程中、工具调用之间写的文字不加按钮。安装后的插件名是 `reply-translate`。
 
 ```
 [翻译 · 简体中文] [英语]

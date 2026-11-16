@@ -1,8 +1,8 @@
-# reply-translate
+# claude-reply-translate
 
 [中文说明](README.zh-CN.md)
 
-A Claude Code mod that adds translate buttons under Claude's **final reply** of each turn in the desktop app's Code tab. The text Claude writes between tool calls while it works gets no buttons.
+A Claude Code mod that adds translate buttons under Claude's **final reply** of each turn in the desktop app's Code tab. The text Claude writes between tool calls while it works gets no buttons. It installs as the plugin `reply-translate`.
 
 ```
 [Translate · Simplified Chinese] [English]
