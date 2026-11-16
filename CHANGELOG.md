@@ -2,6 +2,14 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.9.1 (2026-11-16)
+
+### Changed
+
+- With `replaceOriginal`, a translation in the reply's place ends with a short italic mark on its last line, such as *(translated from English)*, in the interface language, instead of a heading line above it.
+  - Notes translated in place under `translateAll` carry the mark too, so every translated part of a turn says so, including a turn whose reply was already in your language.
+  - After a code block, a table, a rule or a heading the mark starts a paragraph of its own. **Copy** still copies the translation alone.
+
 ## 0.9.0 (2026-11-16)
 
 ### Added

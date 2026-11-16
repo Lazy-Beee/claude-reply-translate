@@ -106,6 +106,10 @@ type Strings = {
   hide: string
   show: string
   showOriginal: string
+  // The note that ends a translation drawn in the reply's place, on its last
+  // line: what it was translated from, or only that it is one.
+  translatedFrom: string
+  translatedMark: string
   // The band above the prompt that acts on the last few replies at once.
   recent: string
   recentOne: string
@@ -126,6 +130,8 @@ const EN: Strings = {
   hide: 'Hide translation',
   show: 'Show translation',
   showOriginal: 'Show original',
+  translatedFrom: '(translated from {language})',
+  translatedMark: '(translated)',
   recent: 'Last {count} replies',
   recentOne: 'Last reply',
   showAll: 'Show translations',
@@ -152,6 +158,8 @@ const STRINGS: Record<string, Strings> = {
     hide: '隐藏译文',
     show: '显示译文',
     showOriginal: '显示原文',
+    translatedFrom: '（翻译自{language}）',
+    translatedMark: '（译文）',
     recent: '最近 {count} 条回复',
     recentOne: '最近 1 条回复',
     showAll: '全部显示译文',
@@ -175,6 +183,8 @@ const STRINGS: Record<string, Strings> = {
     hide: '隱藏譯文',
     show: '顯示譯文',
     showOriginal: '顯示原文',
+    translatedFrom: '（翻譯自{language}）',
+    translatedMark: '（譯文）',
     recent: '最近 {count} 則回覆',
     recentOne: '最近 1 則回覆',
     showAll: '全部顯示譯文',
@@ -198,6 +208,8 @@ const STRINGS: Record<string, Strings> = {
     hide: '訳文を隠す',
     show: '訳文を表示',
     showOriginal: '原文を表示',
+    translatedFrom: '（{language}から翻訳）',
+    translatedMark: '（翻訳）',
     recent: '直近 {count} 件の返信',
     recentOne: '直近の返信',
     showAll: '訳文をすべて表示',
@@ -221,6 +233,8 @@ const STRINGS: Record<string, Strings> = {
     hide: '번역 숨기기',
     show: '번역 보기',
     showOriginal: '원문 보기',
+    translatedFrom: '({language}에서 번역)',
+    translatedMark: '(번역문)',
     recent: '최근 답변 {count}개',
     recentOne: '최근 답변',
     showAll: '번역 모두 보기',
@@ -244,6 +258,8 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Ocultar traducción',
     show: 'Mostrar traducción',
     showOriginal: 'Mostrar original',
+    translatedFrom: '(traducido del {language})',
+    translatedMark: '(traducido)',
     recent: 'Últimas {count} respuestas',
     recentOne: 'Última respuesta',
     showAll: 'Mostrar traducciones',
@@ -267,6 +283,8 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Masquer la traduction',
     show: 'Afficher la traduction',
     showOriginal: "Afficher l'original",
+    translatedFrom: "(traduit de l'original en {language})",
+    translatedMark: '(traduit)',
     recent: 'Les {count} dernières réponses',
     recentOne: 'La dernière réponse',
     showAll: 'Afficher les traductions',
@@ -290,6 +308,8 @@ const STRINGS: Record<string, Strings> = {
     hide: 'Übersetzung ausblenden',
     show: 'Übersetzung anzeigen',
     showOriginal: 'Original anzeigen',
+    translatedFrom: '(übersetzt, Original auf {language})',
+    translatedMark: '(übersetzt)',
     recent: 'Letzte {count} Antworten',
     recentOne: 'Letzte Antwort',
     showAll: 'Übersetzungen zeigen',
@@ -878,6 +898,36 @@ function replacesOriginal(settings: Settings, reply: Reply | undefined): boolean
   return settings.replaceOriginal && isShowing(reply)
 }
 
+// What a translation drawn in a unit's place says it was translated from:
+// the unit's own language when it is recognised.
+function markOf(s: Strings, source: string | undefined, ui: string): string {
+  return source === undefined ? s.translatedMark : s.translatedFrom.replace('{language}', nameOf(source, ui))
+}
+
+// A translation drawn in a unit's place, its mark at the end of its last
+// line, in italics, so it takes no line of its own. After a code block, a
+// table, a rule, a heading or a math block it starts a paragraph: on their
+// line it would join them.
+function withMark(text: string, mark: string): string {
+  const body = text.replace(/\s+$/u, '')
+  const last = body.slice(body.lastIndexOf('\n') + 1).trim()
+  const note = `*${mark}*`
+  const endsBlock =
+    /^(```|~~~)/u.test(last) ||
+    last.startsWith('|') ||
+    /^([-*_])(\s*\1){2,}$/u.test(last) ||
+    /^#{1,6}\s/u.test(last) ||
+    last.endsWith('$$')
+  if (body === '' || endsBlock) {
+    return body === '' ? note : `${body}\n\n${note}`
+  }
+  // A full-width bracket needs no space before it; emphasis just ended does,
+  // or its markers would run into the mark's.
+  const gap = mark.startsWith('（') && !/[*_~]$/u.test(body) ? '' : ' '
+
+  return `${body}${gap}${note}`
+}
+
 function withoutPrefetch(reply: Reply): Reply {
   const copy = { ...reply }
   delete copy.prefetching
@@ -1296,16 +1346,18 @@ export const register: Register = (on, options) => {
     const turnMap = await read($, turns)
     if (turnMap.noteOf[blockId] !== undefined) {
       const note = await currentReply($, blockId, blockText)
+      const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
+      const s = STRINGS[ui] ?? EN
       const replacement =
         replacesOriginal(settings, note) && note?.language !== undefined ? note.texts[note.language] : undefined
       if (replacement !== undefined) {
-        return next({ ...e, props: { ...e.props, text: replacement } })
+        const text = withMark(replacement, markOf(s, replyLanguage(blockText), ui))
+
+        return next({ ...e, props: { ...e.props, text } })
       }
       if (note === undefined || note.status === undefined || (note.status === 'done' && !isShowing(note))) {
         return next(e)
       }
-      const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
-      const s = STRINGS[ui] ?? EN
       const name = note.language === undefined ? '' : nameOf(note.language, ui)
       const original = await next(e)
       const { Box, Markdown, Progress, Text } = $.ui.resolve(e)
@@ -1381,10 +1433,15 @@ export const register: Register = (on, options) => {
     const s = STRINGS[ui] ?? EN
     // With replaceOriginal an open translation is drawn where the reply was,
     // and by the engine itself, as it draws the reply: the same type, spacing
-    // and width. Only the drawing changes; the stored message stays as it is.
+    // and width, with a mark at its end for what it was translated from. Only
+    // the drawing changes; the stored message stays as it is.
     const replacement =
       replacesOriginal(settings, reply) && reply?.language !== undefined ? reply.texts[reply.language] : undefined
-    const drawn = await next(replacement === undefined ? e : { ...e, props: { ...e.props, text: replacement } })
+    const drawn = await next(
+      replacement === undefined
+        ? e
+        : { ...e, props: { ...e.props, text: withMark(replacement, markOf(s, ownLanguage, ui)) } },
+    )
     const { Box, Button, Markdown, Progress, Text } = $.ui.resolve(e)
 
     const targets = targetsFor(settings, ui)
@@ -1445,15 +1502,12 @@ export const register: Register = (on, options) => {
     } else if (units.some(isShowing)) {
       isOpen = true
       const translated = isShowing(reply) ? reply?.texts[current.key] : undefined
-      if (translated !== undefined) {
-        const heading = <Text dimColor>{`${s.translation} · ${label(current)}`}</Text>
-        // In the reply's place the engine draws the translation (`drawn`), so
-        // the panel is its heading alone.
-        panel = isReplaced ? (
-          heading
-        ) : (
+      // In the reply's place the engine draws the translation (`drawn`), its
+      // mark at its end: no panel.
+      if (translated !== undefined && !isReplaced) {
+        panel = (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            {heading}
+            <Text dimColor>{`${s.translation} · ${label(current)}`}</Text>
             <Markdown text={translated} />
           </Box>
         )
@@ -1516,9 +1570,8 @@ export const register: Register = (on, options) => {
 
     return (
       <Box key={`reply-${id}`} flexDirection="column" hover={scope === undefined ? undefined : { scope }}>
-        {isReplaced ? panel : undefined}
         {drawn}
-        {isReplaced || panel === undefined ? undefined : <Box marginTop="sm">{panel}</Box>}
+        {panel === undefined ? undefined : <Box marginTop="sm">{panel}</Box>}
         {bar}
       </Box>
     )
