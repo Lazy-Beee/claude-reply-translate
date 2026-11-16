@@ -1,0 +1,3 @@
+# Text files keep LF line endings in the repository and in every checkout,
+# including the copy Claude Code clones when the mod is installed.
+* text=auto eol=lf
