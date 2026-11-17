@@ -2,6 +2,20 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.12.0 (2026-11-17)
+
+### Added
+
+- `showTokens` (default `false`): each translation says how many tokens it took, every call that made it counted, a second try included. In the reply's place the count goes in the mark at its end, such as *(translated from English, 1,234 tokens)*; under the reply, in the translation's heading. After its label, the row above the prompt shows what the translations of its replies have taken, then the total for the whole session so far, failed calls and translations made again included: *Last 10 replies: 3,456 tokens · Session total: 12,345 tokens*.
+  - The count is input and output tokens together, cached input included.
+  - Counts are kept with the translations, each reply's with it, and the session's total in the mod's store, so a reopened session goes on from it. After `/clear` the new session counts from nothing. The totals of the latest 100 sessions are kept.
+  - A translation made before this version shows no count.
+- `markPosition` (default `end`): `below` puts the mark of a translation in the reply's place on a line of its own under it, in small dim type, with no brackets, such as *Translated from English · 1,234 tokens*. The reply's text has no type size of its own, and the desktop draws no HTML in it, so the mark can only be smaller on a line of its own.
+
+### Changed
+
+- The buttons of the row above the prompt sit at its right end; its label stays at the left.
+
 ## 0.11.0 (2026-11-16)
 
 ### Added

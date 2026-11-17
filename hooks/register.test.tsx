@@ -45,10 +45,16 @@ const reply = (text: string) =>
 type On = Parameters<TestBody>[1]
 
 // Stands in for the engine: the transcript, the clock, the settings, the
-// store and the model. The model answers with the language it was asked for.
+// store, the session's id and the model. The model answers with the language
+// it was asked for.
 function engine(
   on: On,
-  options: { messages?: () => Message[]; language?: string; answer?: (translation: string) => string } = {},
+  options: {
+    messages?: () => Message[]
+    language?: string
+    answer?: (translation: string) => string
+    session?: () => string
+  } = {},
 ) {
   const asked: { prompt: string; system: string }[] = []
   const store = new Map<string, unknown>()
@@ -69,6 +75,8 @@ function engine(
 
     return { value: undefined }
   })
+  on('store.keys', () => ({ value: [...store.keys()] }))
+  on('session.id', () => ({ value: (options.session ?? (() => 'session-1'))() }))
   on('model.complete', (_, e) => {
     const system = String(e.system)
     asked.push({ prompt: String(e.prompt), system })
@@ -942,6 +950,8 @@ test('the band above the prompt shows and hides the translations of the last rep
 
   const row = await $.ui.mount(band)
   expect(await row.find({ type: 'Text', text: /Last 3 replies/ })).toBeDefined()
+  // Without showTokens no total.
+  expect(await row.find({ type: 'Text', text: /Total/ })).toBeUndefined()
   const showAll = await row.find({ type: 'Button', text: /Simplified Chinese/ })
   await row.press({ key: String(showAll?.key) })
 
@@ -1052,6 +1062,215 @@ test('without replaceOriginal the band opens and hides translations under the re
   await hidden.unmount()
   expect(await marked(row)).toBe('Original')
   await row.unmount()
+})
+
+// With markPosition below, the mark leaves the translation's last line for a
+// small line of its own under it, a note's too.
+test(
+  'with markPosition below the mark is a small line under the translation',
+  {
+    options: {
+      languages: 'zh-CN, en',
+      replaceOriginal: true,
+      translateAll: true,
+      showTokens: true,
+      markPosition: 'below',
+    },
+  },
+  async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+    await ui.press({ key: String(main?.key) })
+    expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+    // On a line of its own the mark needs no brackets.
+    const mark = await ui.find({ type: 'Text', text: /^Translated from English · 2 tokens$/ })
+    expect(mark?.props.size).toBe('caption')
+    expect(mark?.props.dimColor).toBe(true)
+    await ui.unmount()
+
+    // The turn's note was put in Chinese with it.
+    const note = await $.ui.mount({ ...reply(WORKING), surface: 'desktop' })
+    expect(await drawn(note)).toEqual(['ZH-TEXT'])
+    expect((await note.find({ type: 'Text', text: /^Translated from English · 2 tokens$/ }))?.props.size).toBe('caption')
+    await note.unmount()
+  },
+)
+
+test(
+  'the mark on its own line is written in the interface language, with no brackets',
+  { options: { languages: 'zh-CN, en', replaceOriginal: true, uiLanguage: 'zh-CN', markPosition: 'below' } },
+  async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const main = await ui.find({ type: 'Button', text: /简体中文/ })
+    await ui.press({ key: String(main?.key) })
+    expect(await drawn(ui)).toEqual(['ZH-TEXT'])
+    expect(await ui.find({ type: 'Text', text: /^翻译自英语$/ })).toBeDefined()
+    await ui.unmount()
+  },
+)
+
+// With showTokens each translation says what its calls took, and the band
+// ends with the session's total. USAGE is one input and one output token a
+// call.
+const COUNTING = { options: { languages: 'zh-CN, en', replaceOriginal: true, showTokens: true } }
+
+test("with showTokens a translation says the tokens it took, and the band the session's total", COUNTING, async ($, on) => {
+  const { store } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+  expect(await drawn(ui)).toEqual(['ZH-TEXT *(translated from English, 2 tokens)*'])
+
+  // Made again: the mark says what the new one took, the total counts both.
+  const refresh = await ui.find({ type: 'Button', text: /\u21BB/ })
+  await ui.press({ key: String(refresh?.key) })
+  expect(await drawn(ui)).toEqual(['ZH-TEXT *(translated from English, 2 tokens)*'])
+  await ui.unmount()
+
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Text', text: /^Last 3 replies: 4 tokens · Session total: 4 tokens$/ })).toBeDefined()
+  expect(store.get('u:session-1')).toBe(4)
+  const kept = store.get(`t:${fingerprint(FINAL_EN)}`) as
+    | { tokens?: Record<string, number>; spent?: number }
+    | undefined
+  expect(kept?.tokens).toEqual({ 'zh-Hans': 2 })
+  expect(kept?.spent).toBe(4)
+  await row.unmount()
+})
+
+test(
+  'with showTokens a translation under the reply counts every call that made it',
+  { options: { languages: 'zh-CN, en', showTokens: true } },
+  async ($, on) => {
+    let calls = 0
+    engine(on, {
+      messages: () => LONG_TURN,
+      answer: () => (calls++ === 0 ? REMARK : `<translation>\n${LONG_ZH}\n</translation>`),
+    })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(LONG_EN), surface: 'desktop' })
+    const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+    await ui.press({ key: String(main?.key) })
+    expect(await ui.find({ type: 'Text', text: /^Translation · Simplified Chinese · 4 tokens$/ })).toBeDefined()
+    await ui.unmount()
+    const row = await $.ui.mount(band)
+    expect(await row.find({ type: 'Text', text: /^Last reply: 4 tokens · Session total: 4 tokens$/ })).toBeDefined()
+    await row.unmount()
+  },
+)
+
+// The band's own count is what its replies' translations took, every call
+// counted, a failed one too; the session's total counts every reply.
+test(
+  "the band counts the tokens of its replies' translations, and the session's beside them",
+  { options: { languages: 'zh-CN, en', replaceOriginal: true, showTokens: true, controlRange: 1 } },
+  async ($, on) => {
+    let calls = 0
+    // The first two calls (the English reply) answer; the next two (the
+    // Japanese one, asked twice) hand the reply back untranslated.
+    engine(on, { answer: translation => `<translation>\n${calls++ < 2 ? translation : FINAL_JA}\n</translation>` })
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const toChinese = await english.find({ type: 'Button', text: /Simplified Chinese/ })
+    await english.press({ key: String(toChinese?.key) })
+    const refresh = await english.find({ type: 'Button', text: /\u21BB/ })
+    await english.press({ key: String(refresh?.key) })
+    await english.unmount()
+    const japanese = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+    const chinese = await japanese.find({ type: 'Button', text: /Simplified Chinese/ })
+    await japanese.press({ key: String(chinese?.key) })
+    expect(await japanese.find({ type: 'Text', text: /the reply came back untranslated/ })).toBeDefined()
+    await japanese.unmount()
+
+    const row = await $.ui.mount(band)
+    expect(await row.find({ type: 'Text', text: /^Last reply: 4 tokens · Session total: 8 tokens$/ })).toBeDefined()
+    await row.unmount()
+  },
+)
+
+test(
+  'the counts are written in the interface language, and a reopened session goes on from its total',
+  { options: { languages: 'zh-CN, en', replaceOriginal: true, showTokens: true, uiLanguage: 'zh-CN' } },
+  async ($, on) => {
+    const { store } = engine(on)
+    store.set('u:session-1', 12345)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+    const main = await ui.find({ type: 'Button', text: /简体中文/ })
+    await ui.press({ key: String(main?.key) })
+    expect(await drawn(ui)).toEqual(['ZH-TEXT*（翻译自英语，2 tokens）*'])
+    await ui.unmount()
+
+    const row = await $.ui.mount(band)
+    expect(await row.find({ type: 'Text', text: /^最近 3 条回复：2 tokens · 会话总计 12,347 tokens$/ })).toBeDefined()
+    await row.unmount()
+  },
+)
+
+test('a kept translation shows the tokens it took when they were counted', COUNTING, async ($, on) => {
+  const { asked, store } = engine(on)
+  store.set(`t:${fingerprint(FINAL_EN)}`, {
+    texts: { 'zh-Hans': 'ZH-TEXT' },
+    language: 'zh-Hans',
+    isHidden: false,
+    tokens: { 'zh-Hans': 1234 },
+    spent: 1300,
+  })
+  store.set(`t:${fingerprint(FINAL_JA)}`, { texts: { 'zh-Hans': 'ZH-TEXT' }, language: 'zh-Hans', isHidden: false })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  expect(await drawn(english)).toEqual(['ZH-TEXT *(translated from English, 1,234 tokens)*'])
+  await english.unmount()
+  // Kept by a version that did not count: no count.
+  const japanese = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  expect(await drawn(japanese)).toEqual([replaced('ZH-TEXT', 'Japanese')])
+  await japanese.unmount()
+  expect(asked).toHaveLength(0)
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Text', text: /^Last 3 replies: 1,300 tokens · Session total: 0 tokens$/ })).toBeDefined()
+  await row.unmount()
+})
+
+test('after /clear the band counts the new session from nothing', COUNTING, async ($, on) => {
+  let session = 'session-1'
+  const { store } = engine(on, { session: () => session })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const english = await $.ui.mount({ ...reply(FINAL_EN), surface: 'desktop' })
+  const toChinese = await english.find({ type: 'Button', text: /Simplified Chinese/ })
+  await english.press({ key: String(toChinese?.key) })
+  await english.unmount()
+
+  session = 'session-2'
+  const row = await $.ui.mount(band)
+  expect(await row.find({ type: 'Text', text: /^Last 3 replies: 2 tokens · Session total: 0 tokens$/ })).toBeDefined()
+  await row.unmount()
+
+  const japanese = await $.ui.mount({ ...reply(FINAL_JA), surface: 'desktop' })
+  const toEnglish = await japanese.find({ type: 'Button', text: /English/ })
+  await japanese.press({ key: String(toEnglish?.key) })
+  await japanese.unmount()
+  const after = await $.ui.mount(band)
+  expect(await after.find({ type: 'Text', text: /^Last 3 replies: 4 tokens · Session total: 2 tokens$/ })).toBeDefined()
+  await after.unmount()
+  expect(store.get('u:session-1')).toBe(2)
+  expect(store.get('u:session-2')).toBe(2)
+})
+
+test('the totals of the latest sessions only are kept', COUNTING, async ($, on) => {
+  const { store } = engine(on)
+  for (let i = 0; i < 120; i++) {
+    store.set(`u:old-${i}`, i)
+  }
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const totals = [...store.keys()].filter(key => key.startsWith('u:'))
+  expect(totals).toHaveLength(99)
+  expect(totals[0]).toBe('u:old-21')
 })
 
 test('controlRange 0 draws no band', { options: { languages: 'zh-CN, en', controlRange: 0 } }, async ($, on) => {

@@ -14,6 +14,14 @@ export type Reply = {
   error?: string
   // The target a translation ahead of time is running for.
   prefetching?: string
+  // The tokens each translation in `texts` took, by target: every call that
+  // made it, a second try included. Absent for one made before they were
+  // counted.
+  tokens?: Record<string, number>
+  // Every token the unit's translations took, into any language: failed
+  // calls and translations made again included, so the band can say what
+  // the recent replies cost.
+  spent?: number
 }
 
 // A block of a final reply made of several text blocks, keyed by the block's
@@ -42,12 +50,18 @@ export type Turns = {
   languageOf: Record<string, string>
 }
 
+// The tokens the session's translations have taken so far, every call
+// counted, a failed one too, and the session they belong to: after a /clear
+// the session goes on under another id and starts from nothing.
+export type Spent = { session: string; tokens: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'reply-translate': {
       finals: Shaped<string[]>
       groups: Shaped<Record<string, Group>>
       turns: Shaped<Turns>
+      spent: Shaped<Spent>
       // The language the buttons are drawn in: a key of the strings table.
       uiLocale: string
       replies: StateFamily<Reply>

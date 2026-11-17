@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
 import type { Group, Note, Reply, Turns } from '../types'
 
@@ -47,6 +47,16 @@ const turns = atom(
   { shape: 'turns-2' },
 )
 
+// The tokens the session's translations have taken so far, kept in $.store
+// too, under SPENT_PREFIX and the session's id, so a reopened session goes on
+// from its total. The totals of the latest MAX_SPENT_SESSIONS sessions are
+// kept.
+const spent = atom({ plugin: 'reply-translate', key: 'spent' } as const, { session: '', tokens: 0 }, {
+  shape: 'spent-1',
+})
+const SPENT_PREFIX = 'u:'
+const MAX_SPENT_SESSIONS = 100
+
 const uiLocale = { plugin: 'reply-translate', key: 'uiLocale' } as const
 
 const replies = { plugin: 'reply-translate', key: 'replies' } as const
@@ -85,6 +95,13 @@ type Settings = {
   controlRange: number
   // Every text block of Claude's gets buttons, not only the final replies.
   translateAll: boolean
+  // Each translation says how many tokens it took, and the band the
+  // session's total.
+  showTokens: boolean
+  // The mark of a translation in a unit's place goes on a small line of its
+  // own under it, rather than at the end of its last line: the reply's text
+  // has no type size, and the desktop draws no HTML in it.
+  isMarkBelow: boolean
 }
 
 const DEFAULT_CONTROL_RANGE = 10
@@ -96,6 +113,12 @@ const CONTROL_PARALLEL = 4
 // over one that came out wrong. A glyph, as a browser's reload is.
 const REFRESH = '\u21BB'
 
+// How far in the mark's own line starts on the desktop, to line up with the
+// reply's text: the desktop draws that text a little in from the edge of the
+// tree a hook returns (about 5px, measured on a screenshot at 150 %), and
+// `xs` is its smallest padding step, 4 to 6px.
+const MARK_LINE_INSET = 'xs'
+
 // The label of the button marked as a turn's mode: a check before its name.
 // The desktop draws its own native buttons: of a Button's look it takes the
 // primary variant (which stood out too much) and the dim label, and drew
@@ -105,7 +128,13 @@ const markedLabel = (name: string) => `✓ ${name}`
 // Replies shorter than this, normalized, are not translated ahead of time.
 const PREFETCH_MIN_CHARS = 12
 
-type StoredReply = { texts: Record<string, string>; language?: string; isHidden: boolean }
+type StoredReply = {
+  texts: Record<string, string>
+  language?: string
+  isHidden: boolean
+  tokens?: Record<string, number>
+  spent?: number
+}
 
 // ---- Strings of the buttons, in the languages the buttons can be drawn in.
 
@@ -115,9 +144,16 @@ type Strings = {
   // The button that shows a turn as it was written.
   original: string
   // The note that ends a translation drawn in the reply's place, on its last
-  // line: what it was translated from, or only that it is one.
+  // line: what it was translated from, or only that it is one. `{tokens}` is
+  // where the tokens it took go, after `separator`, with showTokens.
   translatedFrom: string
   translatedMark: string
+  separator: string
+  // A count of tokens; on the band, what the recent replies took (`{range}`
+  // the band's label) and the session's total.
+  tokens: string
+  recentTokens: string
+  total: string
   // The band above the prompt that acts on the last few replies at once.
   recent: string
   recentOne: string
@@ -129,8 +165,12 @@ const EN: Strings = {
   translating: 'Translating',
   translation: 'Translation',
   original: 'Original',
-  translatedFrom: '(translated from {language})',
-  translatedMark: '(translated)',
+  translatedFrom: '(translated from {language}{tokens})',
+  translatedMark: '(translated{tokens})',
+  separator: ', ',
+  tokens: '{count} tokens',
+  recentTokens: '{range}: {tokens}',
+  total: 'Session total: {tokens}',
   recent: 'Last {count} replies',
   recentOne: 'Last reply',
   failed: 'Translation failed: {reason}',
@@ -149,8 +189,12 @@ const STRINGS: Record<string, Strings> = {
     translating: '正在翻译',
     translation: '译文',
     original: '原文',
-    translatedFrom: '（翻译自{language}）',
-    translatedMark: '（译文）',
+    translatedFrom: '（翻译自{language}{tokens}）',
+    translatedMark: '（译文{tokens}）',
+    separator: '，',
+    tokens: '{count} tokens',
+    recentTokens: '{range}：{tokens}',
+    total: '会话总计 {tokens}',
     recent: '最近 {count} 条回复',
     recentOne: '最近 1 条回复',
     failed: '翻译失败：{reason}',
@@ -166,8 +210,12 @@ const STRINGS: Record<string, Strings> = {
     translating: '正在翻譯',
     translation: '譯文',
     original: '原文',
-    translatedFrom: '（翻譯自{language}）',
-    translatedMark: '（譯文）',
+    translatedFrom: '（翻譯自{language}{tokens}）',
+    translatedMark: '（譯文{tokens}）',
+    separator: '，',
+    tokens: '{count} tokens',
+    recentTokens: '{range}：{tokens}',
+    total: '會話總計 {tokens}',
     recent: '最近 {count} 則回覆',
     recentOne: '最近 1 則回覆',
     failed: '翻譯失敗：{reason}',
@@ -183,8 +231,12 @@ const STRINGS: Record<string, Strings> = {
     translating: '翻訳中',
     translation: '訳文',
     original: '原文',
-    translatedFrom: '（{language}から翻訳）',
-    translatedMark: '（翻訳）',
+    translatedFrom: '（{language}から翻訳{tokens}）',
+    translatedMark: '（翻訳{tokens}）',
+    separator: '、',
+    tokens: '{count} トークン',
+    recentTokens: '{range}：{tokens}',
+    total: 'セッション合計 {tokens}',
     recent: '直近 {count} 件の返信',
     recentOne: '直近の返信',
     failed: '翻訳に失敗しました：{reason}',
@@ -200,8 +252,12 @@ const STRINGS: Record<string, Strings> = {
     translating: '번역 중',
     translation: '번역문',
     original: '원문',
-    translatedFrom: '({language}에서 번역)',
-    translatedMark: '(번역문)',
+    translatedFrom: '({language}에서 번역{tokens})',
+    translatedMark: '(번역문{tokens})',
+    separator: ', ',
+    tokens: '{count} 토큰',
+    recentTokens: '{range}: {tokens}',
+    total: '세션 합계 {tokens}',
     recent: '최근 답변 {count}개',
     recentOne: '최근 답변',
     failed: '번역 실패: {reason}',
@@ -217,8 +273,12 @@ const STRINGS: Record<string, Strings> = {
     translating: 'Traduciendo',
     translation: 'Traducción',
     original: 'Original',
-    translatedFrom: '(traducido del {language})',
-    translatedMark: '(traducido)',
+    translatedFrom: '(traducido del {language}{tokens})',
+    translatedMark: '(traducido{tokens})',
+    separator: ', ',
+    tokens: '{count} tokens',
+    recentTokens: '{range}: {tokens}',
+    total: 'Total de la sesión: {tokens}',
     recent: 'Últimas {count} respuestas',
     recentOne: 'Última respuesta',
     failed: 'Error al traducir: {reason}',
@@ -234,8 +294,12 @@ const STRINGS: Record<string, Strings> = {
     translating: 'Traduction en cours',
     translation: 'Traduction',
     original: 'Original',
-    translatedFrom: "(traduit de l'original en {language})",
-    translatedMark: '(traduit)',
+    translatedFrom: "(traduit de l'original en {language}{tokens})",
+    translatedMark: '(traduit{tokens})',
+    separator: ', ',
+    tokens: '{count} jetons',
+    recentTokens: '{range} : {tokens}',
+    total: 'Total de la session : {tokens}',
     recent: 'Les {count} dernières réponses',
     recentOne: 'La dernière réponse',
     failed: 'Échec de la traduction : {reason}',
@@ -251,8 +315,12 @@ const STRINGS: Record<string, Strings> = {
     translating: 'Wird übersetzt',
     translation: 'Übersetzung',
     original: 'Original',
-    translatedFrom: '(übersetzt, Original auf {language})',
-    translatedMark: '(übersetzt)',
+    translatedFrom: '(übersetzt, Original auf {language}{tokens})',
+    translatedMark: '(übersetzt{tokens})',
+    separator: ', ',
+    tokens: '{count} Tokens',
+    recentTokens: '{range}: {tokens}',
+    total: 'Sitzung gesamt: {tokens}',
     recent: 'Letzte {count} Antworten',
     recentOne: 'Letzte Antwort',
     failed: 'Übersetzung fehlgeschlagen: {reason}',
@@ -787,6 +855,13 @@ async function saveStored($: EngineInterface, id: string, reply: Reply) {
   if (reply.status === 'done' && reply.language !== undefined) {
     record.language = reply.language
   }
+  const tokens = Object.entries(reply.tokens ?? {}).filter(([key]) => reply.texts[key] !== undefined)
+  if (tokens.length > 0) {
+    record.tokens = Object.fromEntries(tokens)
+  }
+  if (reply.spent !== undefined && reply.spent > 0) {
+    record.spent = reply.spent
+  }
   try {
     await $.store.set(storeKey(id), record)
     const raw = await $.store.get(STORE_INDEX)
@@ -825,14 +900,16 @@ async function currentReply($: EngineInterface, id: string, source?: string): Pr
     return reply
   }
   const texts = { ...reply.texts }
+  const tokens = { ...reply.tokens }
   for (const key of unusable) {
     delete texts[key]
+    delete tokens[key]
   }
   if (reply.status === 'done' && reply.language !== undefined && unusable.includes(reply.language)) {
-    return { isHidden: false, texts }
+    return { isHidden: false, texts, tokens, ...(reply.spent === undefined ? {} : { spent: reply.spent }) }
   }
 
-  return { ...reply, texts }
+  return { ...reply, texts, tokens }
 }
 
 async function savedReply($: EngineInterface, id: string): Promise<Reply | undefined> {
@@ -844,12 +921,16 @@ async function savedReply($: EngineInterface, id: string): Promise<Reply | undef
   if (stored === undefined) {
     return undefined
   }
+  const counted = {
+    ...(typeof stored.tokens === 'object' && stored.tokens !== null ? { tokens: stored.tokens } : {}),
+    ...(typeof stored.spent === 'number' && Number.isFinite(stored.spent) ? { spent: stored.spent } : {}),
+  }
   // A translation made ahead of time and never shown keeps no language.
   if (stored.language === undefined || stored.texts[stored.language] === undefined) {
-    return { isHidden: false, texts: stored.texts }
+    return { isHidden: false, texts: stored.texts, ...counted }
   }
 
-  return { status: 'done', language: stored.language, isHidden: stored.isHidden, texts: stored.texts }
+  return { status: 'done', language: stored.language, isHidden: stored.isHidden, texts: stored.texts, ...counted }
 }
 
 async function keep($: EngineInterface, id: string) {
@@ -877,9 +958,27 @@ function replacesOriginal(settings: Settings, reply: Reply | undefined): boolean
 }
 
 // What a translation drawn in a unit's place says it was translated from:
-// the unit's own language when it is recognised.
-function markOf(s: Strings, source: string | undefined, ui: string): string {
-  return source === undefined ? s.translatedMark : s.translatedFrom.replace('{language}', nameOf(source, ui))
+// the unit's own language when it is recognised, then the tokens it took when
+// they are given.
+function markOf(s: Strings, source: string | undefined, ui: string, tokens?: number): string {
+  const mark = source === undefined ? s.translatedMark : s.translatedFrom.replace('{language}', nameOf(source, ui))
+
+  return mark.replace('{tokens}', tokens === undefined ? '' : `${s.separator}${countOf(s, tokens, ui)}`)
+}
+
+// The mark on a line of its own, under the translation: no brackets, the
+// first letter a capital, the tokens after a middle dot.
+function lineMarkOf(s: Strings, source: string | undefined, ui: string, tokens?: number): string {
+  const inner = markOf(s, source, ui).replace(/^[(（](.*)[)）]$/u, '$1')
+  const said = inner.charAt(0).toLocaleUpperCase(ui) + inner.slice(1)
+
+  return tokens === undefined ? said : `${said} · ${countOf(s, tokens, ui)}`
+}
+
+// The heading of a translation drawn under its unit: the language it is in,
+// then the tokens it took when they are given.
+function headingOf(s: Strings, name: string, tokens: number | undefined, ui: string): string {
+  return [s.translation, name, ...(tokens === undefined ? [] : [countOf(s, tokens, ui)])].join(' · ')
 }
 
 // A translation drawn in a unit's place, its mark at the end of its last
@@ -967,6 +1066,8 @@ async function translate(
       language: target.key,
       isHidden: false,
       texts: { ...(value?.texts ?? texts), [target.key]: result.text },
+      tokens: { ...(value ?? base)?.tokens, [target.key]: result.tokens },
+      spent: spentOn(value ?? base, result.tokens),
     }))
     await keep($, id)
   } else {
@@ -976,11 +1077,13 @@ async function translate(
       language: target.key,
       isHidden: false,
       error: result.reason,
+      spent: spentOn(value ?? base, result.tokens),
     }))
   }
 }
 
-type Translation = { isAnswered: true; text: string } | { isAnswered: false; reason: string }
+// A translation or why there is none, and the tokens its calls took.
+type Translation = { isAnswered: true; text: string; tokens: number } | { isAnswered: false; reason: string; tokens: number }
 
 // One translation, checked: an empty answer is an error, and one still in
 // the reply's own language, or far shorter than the reply, is asked for once
@@ -989,6 +1092,7 @@ async function translation($: EngineInterface, model: string, text: string, targ
   const own = replyLanguage(text)
   const source = own === undefined || own === familyOf(target.key) ? undefined : nameOf(own, 'en')
   let retry: Retry | undefined
+  let tokens = 0
   for (let attempt = 0; attempt < 2; attempt++) {
     const result = await $.model.complete({
       model,
@@ -997,23 +1101,128 @@ async function translation($: EngineInterface, model: string, text: string, targ
       maxTokens: Math.min(32000, Math.max(2048, Math.ceil(text.length * 1.5))),
       timeoutMs: 180_000,
     })
+    const used = tokensOf(result.usage)
+    tokens += used
+    await spend($, used)
     if (!result.isAnswered) {
-      return { isAnswered: false, reason: result.reason }
+      return { isAnswered: false, reason: result.reason, tokens }
     }
     const translated = extractTranslation(result.text)
     if (translated === '') {
-      return { isAnswered: false, reason: 'empty-reply' }
+      return { isAnswered: false, reason: 'empty-reply', tokens }
     }
     if (untranslatedKeys(text, { [target.key]: translated }).length > 0) {
       retry = 'untranslated'
     } else if (isTooShort(text, translated)) {
       retry = 'incomplete'
     } else {
-      return { isAnswered: true, text: translated }
+      return { isAnswered: true, text: translated, tokens }
     }
   }
 
-  return { isAnswered: false, reason: retry ?? 'untranslated' }
+  return { isAnswered: false, reason: retry ?? 'untranslated', tokens }
+}
+
+// ---- Tokens: what each translation took, and the session's total.
+
+// A call's tokens, its four counts together: input uncached, read from the
+// prompt cache and written to it, and output.
+function tokensOf(usage: ModelUsage | undefined): number {
+  if (usage === undefined) {
+    return 0
+  }
+  const counts = [
+    usage.input_tokens,
+    usage.cache_read_input_tokens,
+    usage.cache_creation_input_tokens,
+    usage.output_tokens,
+  ]
+
+  return counts.reduce((sum, count) => sum + (Number.isFinite(count) ? count : 0), 0)
+}
+
+// A count of tokens as the interface language writes it: `1,234 tokens`.
+function countOf(s: Strings, tokens: number, ui: string): string {
+  let count: string
+  try {
+    count = new Intl.NumberFormat(ui).format(tokens)
+  } catch {
+    count = String(tokens)
+  }
+
+  return s.tokens.replace('{count}', count)
+}
+
+function spentKey(session: string): string {
+  return `${SPENT_PREFIX}${session}`
+}
+
+// Each write of the total to $.store waits for the one before, and writes
+// the total as it stands then, so the last write holds the latest.
+let spentWrites: Promise<unknown> = Promise.resolve()
+
+// Adds a call's tokens to the session's total. Counting never stops a
+// translation.
+async function spend($: EngineInterface, tokens: number) {
+  if (tokens <= 0) {
+    return
+  }
+  try {
+    const session = await $.session.id()
+    await update($, spent, value => ({ session, tokens: (value.session === session ? value.tokens : 0) + tokens }))
+    spentWrites = spentWrites
+      .then(async () => {
+        const value = await read($, spent)
+        if (value.session === session) {
+          await $.store.set(spentKey(session), value.tokens)
+        }
+      })
+      .catch(() => undefined)
+    await spentWrites
+  } catch {
+    // The total is a convenience: the translation stands.
+  }
+}
+
+// Takes up the session's total where an earlier run of it left off, and
+// keeps the totals of the latest sessions only.
+async function loadSpent($: EngineInterface) {
+  try {
+    const session = await $.session.id()
+    const kept = Number(await $.store.get(spentKey(session)))
+    const stored = Number.isFinite(kept) && kept > 0 ? kept : 0
+    await update($, spent, value =>
+      value.session === session && value.tokens >= stored ? value : { session, tokens: stored },
+    )
+    const others = (await $.store.keys()).filter(key => key.startsWith(SPENT_PREFIX) && key !== spentKey(session))
+    for (const key of others.slice(0, Math.max(0, others.length - (MAX_SPENT_SESSIONS - 1)))) {
+      await $.store.delete(key)
+    }
+  } catch {
+    // No total to take up: the session counts from nothing.
+  }
+}
+
+// The session's total as the band shows it: none after a /clear until the
+// new session's first call.
+async function sessionTotal($: EngineInterface): Promise<number> {
+  const value = await read($, spent)
+  try {
+    return value.session === (await $.session.id()) ? value.tokens : 0
+  } catch {
+    return value.tokens
+  }
+}
+
+// What a unit's translations have taken, with the tokens of one more try.
+function spentOn(reply: Reply | undefined, tokens: number): number {
+  return (reply?.spent ?? 0) + tokens
+}
+
+// What the open translation of a unit took, for its mark or heading: with
+// showTokens, and when it was counted.
+function shownTokens(settings: Settings, reply: Reply | undefined): number | undefined {
+  return settings.showTokens && reply?.language !== undefined ? reply.tokens?.[reply.language] : undefined
 }
 
 // Translates a reply into the person's main language before anyone asks, and
@@ -1030,14 +1239,15 @@ async function prefetch($: EngineInterface, model: string, id: string, text: str
   const result = await translation($, model, text, target)
 
   await update($, { ...replies, id }, (value): Reply => {
-    const reply = withoutPrefetch(value ?? base ?? empty)
+    const reply = { ...withoutPrefetch(value ?? base ?? empty), spent: spentOn(value ?? base, result.tokens) }
     const isWaiting = reply.status === 'running' && reply.language === target.key
     if (!result.isAnswered) {
       return isWaiting ? { ...reply, status: 'error', error: result.reason } : reply
     }
     const texts = { ...reply.texts, [target.key]: result.text }
+    const tokens = { ...reply.tokens, [target.key]: result.tokens }
 
-    return isWaiting ? { ...reply, status: 'done', isHidden: false, texts } : { ...reply, texts }
+    return isWaiting ? { ...reply, status: 'done', isHidden: false, texts, tokens } : { ...reply, texts, tokens }
   })
   await keep($, id)
 }
@@ -1286,11 +1496,14 @@ export const register: Register = (on, options) => {
     showOnHover: options.alwaysShowButtons === false || String(options.alwaysShowButtons).toLowerCase() === 'false',
     controlRange: controlRangeOf(options.controlRange),
     translateAll: options.translateAll === true || String(options.translateAll).toLowerCase() === 'true',
+    showTokens: options.showTokens === true || String(options.showTokens).toLowerCase() === 'true',
+    isMarkBelow: String(options.markPosition ?? 'end').trim().toLowerCase() === 'below',
   }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await refreshUiLanguage($, settings.uiLanguage)
+    await loadSpent($)
     await refresh($, settings.translateAll)
     for (const ms of RESCAN_MS) {
       $.clock.after(ms, () => {
@@ -1370,9 +1583,24 @@ export const register: Register = (on, options) => {
       const replacement =
         replacesOriginal(settings, note) && note?.language !== undefined ? note.texts[note.language] : undefined
       if (replacement !== undefined) {
-        const text = withMark(replacement, markOf(s, replyLanguage(blockText), ui))
+        const source = replyLanguage(blockText)
+        const tokens = shownTokens(settings, note)
+        if (!settings.isMarkBelow) {
+          return next({ ...e, props: { ...e.props, text: withMark(replacement, markOf(s, source, ui, tokens)) } })
+        }
+        const drawnNote = await next({ ...e, props: { ...e.props, text: replacement } })
+        const { Box, Text } = $.ui.resolve(e)
 
-        return next({ ...e, props: { ...e.props, text } })
+        return (
+          <Box key={`note-${blockId}`} flexDirection="column">
+            {drawnNote}
+            <Box paddingLeft={e.surface === 'desktop' ? MARK_LINE_INSET : 0}>
+              <Text dimColor size="caption">
+                {lineMarkOf(s, source, ui, tokens)}
+              </Text>
+            </Box>
+          </Box>
+        )
       }
       if (note === undefined || note.status === undefined || (note.status === 'done' && !isShowing(note))) {
         return next(e)
@@ -1387,7 +1615,7 @@ export const register: Register = (on, options) => {
           <Text color="error">{s.failed.replace('{reason}', s.reasons[note.error ?? ''] ?? note.error ?? '')}</Text>
         ) : (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            <Text dimColor>{`${s.translation} · ${name}`}</Text>
+            <Text dimColor>{headingOf(s, name, shownTokens(settings, note), ui)}</Text>
             <Markdown text={note.texts[note.language ?? ''] ?? ''} />
           </Box>
         )
@@ -1456,12 +1684,23 @@ export const register: Register = (on, options) => {
     // the drawing changes; the stored message stays as it is.
     const replacement =
       replacesOriginal(settings, reply) && reply?.language !== undefined ? reply.texts[reply.language] : undefined
+    const mark = replacement === undefined ? undefined : markOf(s, ownLanguage, ui, shownTokens(settings, reply))
     const drawn = await next(
-      replacement === undefined
+      replacement === undefined || mark === undefined
         ? e
-        : { ...e, props: { ...e.props, text: withMark(replacement, markOf(s, ownLanguage, ui)) } },
+        : { ...e, props: { ...e.props, text: settings.isMarkBelow ? replacement : withMark(replacement, mark) } },
     )
     const { Box, Button, Markdown, Progress, Text } = $.ui.resolve(e)
+    // With markPosition below, the mark on a small line of its own, lined up
+    // with the text.
+    const markLine =
+      settings.isMarkBelow && mark !== undefined ? (
+        <Box paddingLeft={e.surface === 'desktop' ? MARK_LINE_INSET : 0}>
+          <Text dimColor size="caption">
+            {lineMarkOf(s, ownLanguage, ui, shownTokens(settings, reply))}
+          </Text>
+        </Box>
+      ) : undefined
 
     const targets = targetsFor(settings, ui)
     const offered = turnTargets(targets, [ownLanguage, ...notes.map(note => note.language)])
@@ -1537,7 +1776,7 @@ export const register: Register = (on, options) => {
       if (shownIn !== undefined && translated !== undefined && !isReplaced) {
         panel = (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            <Text dimColor>{`${s.translation} · ${label(shownIn)}`}</Text>
+            <Text dimColor>{headingOf(s, label(shownIn), shownTokens(settings, reply), ui)}</Text>
             <Markdown text={translated} />
           </Box>
         )
@@ -1575,6 +1814,7 @@ export const register: Register = (on, options) => {
     return (
       <Box key={`reply-${id}`} flexDirection="column" hover={scope === undefined ? undefined : { scope }}>
         {drawn}
+        {markLine}
         {panel === undefined ? undefined : <Box marginTop="sm">{panel}</Box>}
         {bar}
       </Box>
@@ -1615,19 +1855,38 @@ export const register: Register = (on, options) => {
       }
       turnParts.push(parts)
     }
+    // With showTokens the band says what the translations of its replies
+    // have taken, and of the whole session so far.
+    const total = settings.showTokens ? await sessionTotal($) : undefined
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const range = shown === 1 ? s.recentOne : s.recent.replace('{count}', String(shown))
+    const recentSpent = turnParts.flat().reduce((sum, part) => sum + (part.reply?.spent ?? 0), 0)
+    const label =
+      total === undefined
+        ? range
+        : [
+            s.recentTokens.replace('{range}', range).replace('{tokens}', countOf(s, recentSpent, ui)),
+            s.total.replace('{tokens}', countOf(s, total, ui)),
+          ].join(' · ')
     // Seen in use: with only Chinese replies in range, Simplified Chinese did
     // nothing at all. Only a language some recent part is not written in is
-    // offered, as under a reply; with none to offer the band draws nothing.
+    // offered, as under a reply; with none to offer the band draws no
+    // buttons, only the total when there is one to show.
     const offered = targets.filter(target =>
       turnParts.some(parts =>
         parts.some(part => target.family === undefined || part.language === undefined || part.language !== target.family),
       ),
     )
     if (offered.length === 0) {
-      return next(e)
+      return total === undefined || total === 0 ? (
+        next(e)
+      ) : (
+        <Box flexDirection="row" gap="sm">
+          <Text dimColor>{label}</Text>
+        </Box>
+      )
     }
     const mode = sharedMode(turnParts, offered)
-    const { Box, Button, Text } = $.ui.resolve(e)
     const segment = (key: string, name: string, onPress: () => Promise<void>) => (
       <Button
         key={`rt-${key === ORIGINAL ? 'original' : key}`}
@@ -1637,17 +1896,22 @@ export const register: Register = (on, options) => {
       />
     )
 
+
+    // What the row acts on, and the counts, at its left; the buttons at its
+    // right end, as the user laid it out.
     return (
-      <Box flexDirection="row" gap="sm">
-        <Text dimColor>{shown === 1 ? s.recentOne : s.recent.replace('{count}', String(shown))}</Text>
-        {segment(ORIGINAL, s.original, () => hideAllTranslations($, settings))}
-        {offered.map(target =>
-          segment(
-            target.key,
-            target.family === undefined ? target.key : nameOf(target.key, ui),
-            () => translateRecent($, settings, target),
-          ),
-        )}
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm" width="100%">
+        <Text dimColor>{label}</Text>
+        <Box flexDirection="row" gap="sm">
+          {segment(ORIGINAL, s.original, () => hideAllTranslations($, settings))}
+          {offered.map(target =>
+            segment(
+              target.key,
+              target.family === undefined ? target.key : nameOf(target.key, ui),
+              () => translateRecent($, settings, target),
+            ),
+          )}
+        </Box>
       </Box>
     )
   })
