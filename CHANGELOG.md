@@ -2,6 +2,12 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.12.2 (2026-11-19)
+
+### Fixed
+
+- A reply that mostly quotes English text, such as a manuscript's abstract in a block quote and its wording in quotation marks, failed as "the reply came back untranslated" when the translation kept the quotes in English: the quotes outweighed the translated prose. A text's language is now judged on what it does not quote, and on its quotes only when there is too little else. A reply handed back unchanged still fails.
+
 ## 0.12.1 (2026-11-19)
 
 ### Fixed

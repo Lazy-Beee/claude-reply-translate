@@ -1094,6 +1094,71 @@ test('a formula gets the room beside it that the reply gives it', REPLACING, asy
   await ui.unmount()
 })
 
+// Seen in use: a reply quoting a manuscript's English abstract and wording,
+// translated into Chinese with the quotes kept as they were, had more English
+// words than Han characters and failed as untranslated. What a reply quotes
+// does not decide its language; a reply handed back unchanged still fails.
+const ABSTRACT =
+  'In two-powder laser directed energy deposition, how each powder particle delivers its composition into the molten pool is not measured in situ, and grid-based models add powder at grid-cell scale. This study develops a powder-resolved model with composition transport and the solutal Marangoni force. Five line scans deposit Ti64 and H13 powder on a Ti64 substrate. The model reproduces the scan track width within 5.9% and the build height and melt depth within 7.5%. It does not reproduce the track widening with H13 or the number of retained unmelted particles. The landing site relative to the solidification front decides whether a powder particle halts, which delays its melting and dilution three to five times.'
+const QUOTING = [
+  'I trimmed the abstract to 249 words. Nothing is committed.',
+  '',
+  '- "evaporation with its recoil pressure" → "evaporation with recoil pressure".',
+  '- "at H13 mass fractions of 0.1 to 0.5 in the powder flow" → "at powder-flow H13 mass fractions of 0.1–0.5".',
+  '',
+  'The abstract now reads:',
+  `> ${ABSTRACT}`,
+  '',
+  'The limit is now recorded in the TODO.',
+].join('\n')
+const QUOTING_ZH = [
+  '我把摘要删到了 249 词，还没有提交。',
+  '',
+  '- “evaporation with its recoil pressure” → “evaporation with recoil pressure”。',
+  '- "at H13 mass fractions of 0.1 to 0.5 in the powder flow" → "at powder-flow H13 mass fractions of 0.1–0.5"。',
+  '',
+  '摘要现在是：',
+  `> ${ABSTRACT}`,
+  '',
+  '字数限制已记在 TODO 里。',
+].join('\n')
+const QUOTING_TURN: Message[] = [
+  { role: 'user', content: [{ type: 'text', text: 'Keep the abstract under 250 words.' }] },
+  { role: 'assistant', content: [{ type: 'text', text: QUOTING }] },
+]
+
+test('a translation that keeps what the reply quotes in English is a translation', REPLACING, async ($, on) => {
+  const { asked, store } = engine(on, {
+    messages: () => QUOTING_TURN,
+    answer: () => `<translation>\n${QUOTING_ZH}\n</translation>`,
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(QUOTING), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.system).toContain('written in English')
+  expect(await drawn(ui)).toEqual([replaced(QUOTING_ZH, 'English')])
+  expect(store.has(`t:${fingerprint(QUOTING)}`)).toBe(true)
+  await ui.unmount()
+})
+
+test('a reply that quotes, handed back unchanged, is still untranslated', REPLACING, async ($, on) => {
+  const { asked } = engine(on, {
+    messages: () => QUOTING_TURN,
+    answer: () => `<translation>\n${QUOTING}\n</translation>`,
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(QUOTING), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+
+  expect(asked).toHaveLength(2)
+  expect(await ui.find({ type: 'Text', text: /the reply came back untranslated/ })).toBeDefined()
+  await ui.unmount()
+})
+
 // With markPosition below, the mark leaves the translation's last line for a
 // small line of its own under it, a note's too.
 test(

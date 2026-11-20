@@ -1,6 +1,6 @@
 {
   "name": "reply-translate",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Adds translate buttons under Claude's final reply of each turn",
   "author": { "name": "Lazy-Beee" },
   "license": "MIT",

@@ -457,19 +457,42 @@ const ENGLISH_WORDS = new Set([
   'you', 'on', 'be', 'was', 'have', 'will', 'can', 'if', 'an', 'not',
 ])
 
+// A text's prose without what it quotes: block quotes, and quotes in "…",
+// “…”, 「…」 or 『…』 within a line.
+function withoutQuotes(prose: string): string {
+  return prose
+    .replace(/^[ \t]*>.*$/gmu, ' ')
+    .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|『[^』\n]*』/gu, ' ')
+}
+
+type Scripts = { han: number; kana: number; hangul: number; words: string[] }
+
+function scriptsOf(prose: string): Scripts {
+  return {
+    han: (prose.match(/\p{Script=Han}/gu) ?? []).length,
+    kana: (prose.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu) ?? []).length,
+    hangul: (prose.match(/\p{Script=Hangul}/gu) ?? []).length,
+    words: prose.match(/\p{Script=Latin}+/gu) ?? [],
+  }
+}
+
+// Too little to judge a language on.
+const isScant = (scripts: Scripts) => scripts.han + scripts.kana + scripts.hangul + scripts.words.length < 3
+
 // The base language a reply is written in, judged on its prose (code, inline
 // code and links left out): zh, ja, ko or en; undefined when unclear. A Han
 // character counts as much as a Latin word, so a Chinese reply full of
-// English terms is still Chinese.
+// English terms is still Chinese. What the reply quotes counts only when
+// there is too little else: a translation keeps the passages a reply quotes
+// as they were, and seen in use, a reply quoting a 250-word English abstract,
+// translated into Chinese with the abstract kept, was judged still English.
 function replyLanguage(text: string): string | undefined {
   const prose = text
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\n]*`/g, ' ')
     .replace(/https?:\/\/\S+/g, ' ')
-  const han = (prose.match(/\p{Script=Han}/gu) ?? []).length
-  const kana = (prose.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu) ?? []).length
-  const hangul = (prose.match(/\p{Script=Hangul}/gu) ?? []).length
-  const words = prose.match(/\p{Script=Latin}+/gu) ?? []
+  const unquoted = scriptsOf(withoutQuotes(prose))
+  const { han, kana, hangul, words } = isScant(unquoted) ? scriptsOf(prose) : unquoted
   const cjk = han + kana
   if (cjk + hangul + words.length < 3) {
     return undefined
