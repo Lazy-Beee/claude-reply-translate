@@ -2,6 +2,12 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.12.1 (2026-11-19)
+
+### Fixed
+
+- On the desktop, a formula that a translation put right beside markup, such as `**第 5.1 节:**$t_{\mathrm{mix}}$`, was drawn as plain text, and its underscores, read as italics, broke the other formulas of the line. Where the reply has a space beside a formula, the translation gets one too when it is drawn, so translations kept before are drawn right as well. Code blocks and inline code keep their dollars as they are. The prompt also asks the model to keep formulas and the space around them.
+
 ## 0.12.0 (2026-11-17)
 
 ### Added

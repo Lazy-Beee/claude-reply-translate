@@ -522,6 +522,7 @@ function systemPrompt(language: string, source: string | undefined, retry: Retry
         ]
       : []),
     'Keep the Markdown structure. Leave code blocks, inline code, commands, file paths, URLs and identifiers unchanged.',
+    'Keep every formula ($...$ or $$...$$) exactly as written, with a space between it and the text or markup beside it wherever the reply has one.',
     `Start your answer with ${TRANSLATION_OPEN} and write the whole translation inside ${TRANSLATION_OPEN}${TRANSLATION_CLOSE} tags.`,
     'Write nothing outside those tags: no remarks about the text, no plan, no notes on how you translated it.',
   ].join('\n')
@@ -955,6 +956,85 @@ function isShowing(reply: Reply | undefined): boolean {
 // one language at a time.
 function replacesOriginal(settings: Settings, reply: Reply | undefined): boolean {
   return settings.replaceOriginal && isShowing(reply)
+}
+
+// ---- Formulas: the desktop draws `$…$` as math only with room around it.
+
+// An inline formula: one dollar each side, not an escaped `\$`, and no space
+// just inside either dollar.
+const FORMULA = /(?<![\\$])\$(?=\S)([^$\n]*?\S)\$(?!\$)/gu
+
+// Applies `edit` to a text's prose, leaving code blocks and inline code as
+// they are: a dollar there is a shell's, not a formula's.
+function inProse(text: string, edit: (prose: string) => string): string {
+  let isCode = false
+
+  return text
+    .split('\n')
+    .map(line => {
+      if (/^\s*(```|~~~)/u.test(line)) {
+        isCode = !isCode
+
+        return line
+      }
+      if (isCode) {
+        return line
+      }
+
+      return line
+        .split(/(`+[^`]*`+)/u)
+        .map((part, i) => (i % 2 === 1 ? part : edit(part)))
+        .join('')
+    })
+    .join('\n')
+}
+
+const isSpace = (char: string | undefined) => char === undefined || /\s/u.test(char)
+
+// Which sides of each formula of a text have room: a space, or the line's
+// start or end.
+function formulaRoom(text: string): Map<string, { before: boolean; after: boolean }> {
+  const room = new Map<string, { before: boolean; after: boolean }>()
+  inProse(text, prose => {
+    for (const match of prose.matchAll(FORMULA)) {
+      const at = match.index ?? 0
+      const seen = room.get(match[0])
+      room.set(match[0], {
+        before: (seen?.before ?? false) || isSpace(prose[at - 1]),
+        after: (seen?.after ?? false) || isSpace(prose[at + match[0].length]),
+      })
+    }
+
+    return prose
+  })
+
+  return room
+}
+
+// A translation as it is drawn: a formula the reply has room beside gets that
+// room in the translation too. Seen in use: a translation wrote
+// `**第 5.1 节:**$t_{\mathrm{mix}}$`, with nothing between the bold and the
+// formula, and the desktop drew neither formula of the line, reading their
+// underscores as italics; the reply, with a space there, drew both.
+function spacedLike(original: string, translated: string): string {
+  if (!translated.includes('$')) {
+    return translated
+  }
+  const room = formulaRoom(original)
+  if (room.size === 0) {
+    return translated
+  }
+
+  return inProse(translated, prose =>
+    prose.replace(FORMULA, (formula: string, _inside: string, at: number) => {
+      const wanted = room.get(formula)
+      const end = at + formula.length
+      const before = wanted?.before === true && !isSpace(prose[at - 1]) && at > 0 ? ' ' : ''
+      const after = wanted?.after === true && !isSpace(prose[end]) && end < prose.length ? ' ' : ''
+
+      return `${before}${formula}${after}`
+    }),
+  )
 }
 
 // What a translation drawn in a unit's place says it was translated from:
@@ -1580,8 +1660,9 @@ export const register: Register = (on, options) => {
       const note = await currentReply($, blockId, blockText)
       const ui = (await read($, uiLocale)) ?? uiLanguageOf(systemLocale())
       const s = STRINGS[ui] ?? EN
-      const replacement =
+      const kept =
         replacesOriginal(settings, note) && note?.language !== undefined ? note.texts[note.language] : undefined
+      const replacement = kept === undefined ? undefined : spacedLike(blockText, kept)
       if (replacement !== undefined) {
         const source = replyLanguage(blockText)
         const tokens = shownTokens(settings, note)
@@ -1616,7 +1697,7 @@ export const register: Register = (on, options) => {
         ) : (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
             <Text dimColor>{headingOf(s, name, shownTokens(settings, note), ui)}</Text>
-            <Markdown text={note.texts[note.language ?? ''] ?? ''} />
+            <Markdown text={spacedLike(blockText, note.texts[note.language ?? ''] ?? '')} />
           </Box>
         )
 
@@ -1682,8 +1763,9 @@ export const register: Register = (on, options) => {
     // and by the engine itself, as it draws the reply: the same type, spacing
     // and width, with a mark at its end for what it was translated from. Only
     // the drawing changes; the stored message stays as it is.
-    const replacement =
+    const kept =
       replacesOriginal(settings, reply) && reply?.language !== undefined ? reply.texts[reply.language] : undefined
+    const replacement = kept === undefined ? undefined : spacedLike(text, kept)
     const mark = replacement === undefined ? undefined : markOf(s, ownLanguage, ui, shownTokens(settings, reply))
     const drawn = await next(
       replacement === undefined || mark === undefined
@@ -1777,7 +1859,7 @@ export const register: Register = (on, options) => {
         panel = (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
             <Text dimColor>{headingOf(s, label(shownIn), shownTokens(settings, reply), ui)}</Text>
-            <Markdown text={translated} />
+            <Markdown text={spacedLike(text, translated)} />
           </Box>
         )
       }

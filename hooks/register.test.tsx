@@ -1064,6 +1064,36 @@ test('without replaceOriginal the band opens and hides translations under the re
   await row.unmount()
 })
 
+// Seen in use: the translation put a formula right after a bold label, and
+// the desktop drew no math on that line. A formula with a space beside it in
+// the reply gets one in the translation too; code keeps its dollars as they
+// are.
+test('a formula gets the room beside it that the reply gives it', REPLACING, async ($, on) => {
+  const ORIGINAL =
+    '- **Section 5.1:** $t_{\\mathrm{mix}}$ and the Ti64 $\\bar{c}_{\\mathrm{fz}}$ of 0.02, with $x$ as before. Run `echo a$x$b` to see it.'
+  const MATH_TURN: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: 'Which parts depend on it?' }] },
+    { role: 'assistant', content: [{ type: 'text', text: ORIGINAL }] },
+  ]
+  const { asked } = engine(on, {
+    messages: () => MATH_TURN,
+    answer: () =>
+      '<translation>\n- **第 5.1 节:**$t_{\\mathrm{mix}}$ 以及 Ti64 的 $\\bar{c}_{\\mathrm{fz}}$(0.02)，以及 $x$ 同前。运行 `echo a$x$b` 查看。\n</translation>',
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...reply(ORIGINAL), surface: 'desktop' })
+  const main = await ui.find({ type: 'Button', text: /Simplified Chinese/ })
+  await ui.press({ key: String(main?.key) })
+  expect(asked[0]?.system).toContain('Keep every formula')
+  expect(await drawn(ui)).toEqual([
+    replaced(
+      '- **第 5.1 节:** $t_{\\mathrm{mix}}$ 以及 Ti64 的 $\\bar{c}_{\\mathrm{fz}}$ (0.02)，以及 $x$ 同前。运行 `echo a$x$b` 查看。',
+      'English',
+    ),
+  ])
+  await ui.unmount()
+})
+
 // With markPosition below, the mark leaves the translation's last line for a
 // small line of its own under it, a note's too.
 test(
