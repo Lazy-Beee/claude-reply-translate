@@ -2,6 +2,12 @@
 
 All notable changes to reply-translate. Versions follow the `version` in `.claude-plugin/plugin.json`.
 
+## 0.12.3 (2026-11-20)
+
+### Fixed
+
+- In a narrow window the band's buttons squeezed its counts into a column a word wide. Where one row has no room for both, the buttons now take a row of their own under the counts, still at the right end; a wide band is drawn as before.
+
 ## 0.12.2 (2026-11-19)
 
 ### Fixed

@@ -2003,11 +2003,14 @@ export const register: Register = (on, options) => {
 
 
     // What the row acts on, and the counts, at its left; the buttons at its
-    // right end, as the user laid it out.
+    // right end, as the user laid it out. Seen in use: in a narrow window the
+    // buttons squeezed the counts into a column a word wide. Where one row
+    // has no room for both, the buttons now take a row of their own under
+    // the counts, still at the right end; a wide row is drawn as before.
     return (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm" width="100%">
+      <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" gap="sm" width="100%">
         <Text dimColor>{label}</Text>
-        <Box flexDirection="row" gap="sm">
+        <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" flexGrow={1} gap="sm">
           {segment(ORIGINAL, s.original, () => hideAllTranslations($, settings))}
           {offered.map(target =>
             segment(
